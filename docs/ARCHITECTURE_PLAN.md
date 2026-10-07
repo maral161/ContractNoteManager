@@ -107,7 +107,8 @@ API does not leak into the UI.
 
 - **Trigger:** only manual. The UI's "Import" button opens a dialog with a date range
   (default: today) and calls `POST /api/v1/imports`.
-- **Flow:** fetch all pages → map → **upsert** by Sharpfin `key` → write an `import_run` record.
+- **Flow:** fetch all list pages → fetch each order's **details with allocation figures** →
+  map → **upsert** by Sharpfin `key` → write an `import_run` record.
 - **Idempotent:** re-importing the same day updates orders instead of duplicating them.
 - **Safe:** timeouts and a short retry on network errors. Each page is saved in its own
   transaction, and the run is marked `FAILED` or `PARTIAL` with the error message.
@@ -154,6 +155,36 @@ After the loop, check that the number of orders received equals `no_of_elements`
 run `PARTIAL` if it doesn't. Orders can be added while the import is paging, so orders are
 upserted by `key`, which makes it harmless to see one twice.
 
+**Order details with allocation figures** (second call, once per order):
+
+```
+GET /api/orders/{key}?calculate_allocations=true        (key URL-encoded, e.g. LTU3MDIz…NjcwOA%3D%3D)
+```
+
+It returns the same order as the list, plus:
+
+- a filled **`broker`** object: `key`, `name` ("BN Amro"), `bic` ("ABNANL2A"), `lei`
+- the current `commission` (e.g. "1200") and `owner`. The owner can be a `system_user` or an
+  `organization`, e.g. "Betty Gunnarsson"
+- per allocation, the holdings figures the edit modal needs:
+
+| Allocation field | Example (Kattegatt AB) | Modal column |
+|---|---|---|
+| `value` | 1761 | New Quantity / Order Quantity |
+| `commission` | 1134 | Commission |
+| `portfolio_quantity` | 2927.0 | Alloc pre-trade |
+| `portfolio_weight` | 12.55 | % pre-trade |
+| `target_quantity` | 1166.0 | Alloc post-trade (= 2927 − 1761 for a sell) |
+| `target_weight` | 5.00 | % post-trade |
+| `order_weight` | −7.55 | Order Weight (= post − pre weight) |
+
+The importer calls this once per order, one after another (19 orders → 19 small calls). The
+import log counts failures per order: an order whose details fail keeps its list data and
+is marked "details missing".
+
+The `version` grows with every change in Sharpfin (1 in the list sample, 7 here). That is
+exactly what the change detection in 4.3 relies on.
+
 **Observations about the payload that shape the design:**
 
 | Observation | Consequence |
@@ -167,7 +198,7 @@ upserted by `key`, which makes it harmless to see one twice.
 | `type` = `quantity` → `value` is a number of units; `type` = `amount` → `value` is a cash amount | The UI labels and validates `value` according to `type` |
 | `settlement_amount` ≈ `price × value`, positive for `sell` and negative for `buy` | Shown as a cash flow; can be recalculated (and checked) after edits |
 | `asset.type` varies (`equity`, `fund`); funds carry extra `type_data` | Store the common columns and keep `type_data` as `JSONB` |
-| `broker` and `exchange` are empty objects in the sample | Store as nullable `JSONB` until real data shows their structure |
+| `broker` is an object (`key`, `name`, `bic`, `lei`), empty when not yet chosen; `exchange` is empty | Brokers become a reference table (like custody); `exchange` stays `JSONB` |
 | `custody.contract_notes_enabled` exists | Probably relevant for producing contract notes per custody (see open questions) |
 | The payload contains personal data (owner name/email, client names in `portfolio_name`) | GDPR: restrict access, never log full payloads, and use only anonymised samples as test data |
 
@@ -209,13 +240,22 @@ Because imports are manual, the rule can stay simple: **local edits win**.
   | Price | *Price* field | > 0 |
   | Broker | *Counterpart* drop-down (with suggestions from brokers already used; new names can be typed) | max 200 characters |
   | Order responsible | *Owner* drop-down (known owners from imports) | must exist |
+  | Commission | *Commission* field (order total) | ≥ 0. Split over the portfolios by quantity, rounded to whole units; the rounding remainder goes to the largest allocation, so the parts always add up (1,200 → 1,134 + 66) |
 
-  Everything else (amount, status, ISIN, currency, booked, valid to, custody, source, comment,
-  commission) is read-only, both in the UI and in the API (`PATCH` rejects other fields).
+  Everything else (amount, status, ISIN, currency, booked, valid to, custody, source, comment)
+  is read-only, both in the UI and in the API (`PATCH` rejects other fields).
 - **Allocations:** the quantity is changed by editing the allocations, so the order quantity
   always equals their total and the two can never disagree. Portfolios can be added
   (*Type to start searching…* + **Add**) or removed (bin icon). The *Quantity rounding*
   buttons (None / 1 / 10 / 100) round the new quantities to that step.
+- **Pre-/post-trade figures while editing:** pre-trade (holding, %) comes from the import.
+  Post-trade is recalculated live from the new quantity:
+  - quantity: post = pre − new quantity for a sell, pre + new quantity for a buy
+  - %: post = pre % × post quantity / pre quantity. Check: 12.55 × 1166 / 2927 = 5.00 ✓,
+    and 11.03 × 86 / 189 = 5.02 ✓
+  - Order Weight = post % − pre %
+
+  For a portfolio added by hand, or one without a holding, the figures show "–".
 - **When edits are allowed:** while the order is `NEW`, `ON_MARKET` or `TRADED`. From
   `CONFIRMED` on, the order is locked, because it has been checked against its contract note.
 - **Consequences of an edit:**
@@ -385,9 +425,9 @@ the note and shown next to the order's values.
 |---|---|---|
 | GET | `/api/v1/orders?page=&size=&sort=&dateType=booked\|traded\|settled&from=&to=&asset=&portfolio=&owner=&status=&custody=&noteMatch=` | Paged, sortable, filterable order list (server-side, matching the mockup's toolbar) |
 | GET | `/api/v1/orders/{id}` | Order detail including allocations |
-| PATCH | `/api/v1/orders/{id}` (body: `price`, `broker`, `ownerId`, `allocations[{portfolioId, quantity}]`, `version`) | Save from the edit modal (4.4). The order quantity = total of the allocations. 409 when the order is locked or stale |
+| PATCH | `/api/v1/orders/{id}` (body: `price`, `commission`, `brokerId` or `brokerName`, `ownerId`, `allocations[{portfolioId, quantity}]`, `version`) | Save from the edit modal (4.4). The order quantity = total of the allocations. 409 when the order is locked or stale |
 | GET | `/api/v1/portfolios?q=` | Portfolio search for *Add* in the allocation table |
-| GET | `/api/v1/owners` | Options for "Order responsible" |
+| GET | `/api/v1/owners`, `/api/v1/brokers` | Options for "Owner" and "Counterpart" |
 | POST | `/api/v1/orders` | Create an order manually ("Create new" button) |
 | DELETE | `/api/v1/orders/{id}` | Delete (a linked note becomes unmatched) |
 | POST | `/api/v1/orders/{id}/status/advance` (body: `expectedStatus`) | Blue button: move to the next status (4.4.1) |
@@ -456,6 +496,14 @@ CREATE TABLE owner (                                       -- the Sharpfin user 
     type      VARCHAR(50)                                  -- "system_user"
 );
 
+CREATE TABLE broker (
+    id        BIGSERIAL PRIMARY KEY,
+    sf_key    VARCHAR(64)  UNIQUE,                         -- NULL for brokers typed in locally
+    name      VARCHAR(200) NOT NULL,                       -- "BN Amro"
+    bic       VARCHAR(11),
+    lei       VARCHAR(20)
+);
+
 CREATE TABLE portfolio (
     id        BIGSERIAL PRIMARY KEY,
     sf_key    VARCHAR(64)  NOT NULL UNIQUE,                -- allocation[].key
@@ -491,7 +539,7 @@ CREATE TABLE orders (                                      -- "order" is a reser
     is_merged                 BOOLEAN NOT NULL DEFAULT FALSE,
     handled_manually          BOOLEAN NOT NULL DEFAULT FALSE,
     handled_manually_eligible BOOLEAN NOT NULL DEFAULT FALSE,
-    broker                    JSONB,
+    broker_id                 BIGINT       REFERENCES broker(id),   -- "Counterpart", editable
     exchange                  JSONB,
     sf_deleted                BOOLEAN NOT NULL DEFAULT FALSE,
     -- local bookkeeping
@@ -499,8 +547,8 @@ CREATE TABLE orders (                                      -- "order" is a reser
     sync_conflict             BOOLEAN NOT NULL DEFAULT FALSE,
     last_synced_at            TIMESTAMPTZ,
     raw_payload               JSONB,                       -- last imported order, used for "revert"
-    version                   INTEGER NOT NULL DEFAULT 0,  -- optimistic locking for local edits
-    counterpart               VARCHAR(200)                 -- broker, editable in the edit modal
+    details_imported_at       TIMESTAMPTZ,                 -- when the allocation figures were fetched
+    version                   INTEGER NOT NULL DEFAULT 0   -- optimistic locking for local edits
 );
 CREATE INDEX ix_orders_booked_date ON orders(booked_date);
 CREATE INDEX ix_orders_traded_date ON orders(traded_date);
@@ -516,6 +564,13 @@ CREATE TABLE order_allocation (
     status        VARCHAR(30),
     reason        TEXT,
     external_id   VARCHAR(100),
+    original_value      NUMERIC(24,8),          -- "Order Quantity" column: value as imported
+    commission          NUMERIC(24,8),          -- share of the order commission
+    portfolio_quantity  NUMERIC(24,8),          -- holding before the trade ("Alloc pre-trade")
+    portfolio_weight    NUMERIC(9,4),           -- % before the trade
+    target_quantity     NUMERIC(24,8),          -- holding after the trade (as imported)
+    target_weight       NUMERIC(9,4),           -- % after the trade (as imported)
+    order_weight        NUMERIC(9,4),           -- target_weight - portfolio_weight
     UNIQUE (order_id, portfolio_id)
 );
 
@@ -666,7 +721,7 @@ frontend/src/
 | Commission | `commission` | |
 | Curr | `currency_code` | |
 | Owner | `owner.name` | ✓ |
-| Counterpart | The order's broker (editable) | |
+| Counterpart | `broker.name` (editable in the modal) | |
 | Custody | `custody.name` | |
 | **Contract Note Match** *(new)* | 🟢 green lamp when a note is matched, grey otherwise. Clicking the lamp opens the note (PDF + extracted values) next to the order | ✓ |
 | ⚙ (header) | Show/hide columns; the choice is remembered in the browser | – |
@@ -742,15 +797,16 @@ An antd `Modal` (about 1080 px wide) opened by the pencil:
 |---|---|
 | Header "Order / Sell ABB" | Side + asset name |
 | Amount, Status, ISIN, Currency, Booked | Read-only. Amount updates live when price or quantities change |
-| Valid to, Custody, Source, Comment, Commission | Shown, but **read-only** (greyed like *Custody*), since they aren't on the editable list |
+| Valid to, Custody, Source, Comment | Shown, but **read-only** (greyed like *Custody*), since they aren't on the editable list |
+| **Commission** | Editable (order total), split over the portfolios (4.4) |
 | **Counterpart** | Editable (= broker). Select with search, clear button and free text |
 | **Price** | Editable, number input with thousands separators |
 | **Owner** | Editable (= order responsible). Select of known owners |
 | **Quantity rounding** None / 1 / 10 / 100 | Rounds the *New Quantity* values to that step |
 | Allocation table: Portfolio, **New Quantity** (editable), Order Quantity (as imported/last saved), bin icon | As in the screenshot |
 | *Type to start searching…* + **Add** | Adds a portfolio (search over known portfolios) |
-| Order Weight, Alloc post-/pre-trade, % post-/pre-trade | **Not available**: they need portfolio holdings, which the orders API doesn't provide. Columns hidden (see open questions) |
-| Commission per portfolio | The order commission split by quantity (1,761/1,864 × 1,200 = 1,134), as in the screenshot. Read-only |
+| Order Weight, Alloc post-trade, % post-trade, Alloc pre-trade, % pre-trade | From the order details call (4.2.1); post-trade and Order Weight recalculated live while editing (4.4) |
+| Commission per portfolio | The allocation's `commission`, re-split when the order commission or quantities change. Read-only |
 | Total row | Sum of New Quantity and Order Quantity |
 | Close / **Save and close** / **Save** | Save keeps the modal open; Save and close closes it. Close with unsaved changes asks for confirmation. HTTP 409 → "order changed or locked, reload" |
 
@@ -811,9 +867,5 @@ Phases 2 and 3 can be built in parallel. Phase 4 can start as soon as the API in
    confirmed, either from the Python script or on the first test from the Mac: how the
    username/password are sent (JSON field names, `POST`?), and whether a cookie or a token
    comes back.
-2. **Commission:** it is not on the editable list, but the modal shows it as an input
-   (1,200 in the screenshot), and every sample note has a commission. Should it be editable too?
-3. **Order Weight / Alloc pre- and post-trade:** these need portfolio holdings. Is there a
-   Sharpfin API for them, or can the columns stay hidden?
-4. **Write-back:** should edits or status changes ever be sent back to Sharpfin? (Not decided
+2. **Write-back:** should edits or status changes ever be sent back to Sharpfin? (Not decided
    yet; the design keeps it possible.)
