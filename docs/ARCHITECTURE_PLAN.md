@@ -6,7 +6,8 @@
 2. **Persist** them in a relational database.
 3. **Modify** the stored orders (edit, delete, revert to the imported values, with validation).
 4. **Move orders through a status workflow**: new → on market → traded → confirmed → allocated.
-5. **Match orders with contract notes**. A match confirms the order automatically.
+5. **Upload contract notes (PDF)**, let an LLM (Claude) read the key fields, and **match** them
+   with orders. A match confirms the order automatically.
 6. **Display and edit** everything in a web UI based on the mockup.
 
 **Context and decisions so far**
@@ -38,6 +39,8 @@
 | Data fetching | TanStack Query + a small `fetch` wrapper | Caching and automatic refresh after edits |
 | Forms | Ant Design `Form` | Built-in form state and validation, consistent with the rest of the UI |
 | Build | Maven (backend, also builds the frontend into the JAR), npm (frontend) | |
+| Contract note reading | **Claude API** (official Java SDK `com.anthropic:anthropic-java`, model `claude-opus-5-5`) | Contract-note PDFs look different for every broker. Claude reads the PDF directly and returns the fields as typed JSON (structured output), so no per-broker templates are needed |
+| PDF preview | Browser's built-in PDF viewer (`<iframe>`) | No extra library |
 | Testing | JUnit 5, Testcontainers (real Postgres), WireMock (fake Sharpfin API); Vitest + React Testing Library | |
 
 **Left out on purpose** for a single-user local app: scheduled imports, login/roles, multi-instance
@@ -91,7 +94,7 @@ backend/src/main/java/com/contractnotemanager/
 ├── domain/          # JPA entities + enums
 ├── repository/      # Spring Data repositories
 ├── service/         # Business logic, validation, transactions, status workflow
-├── matching/        # Contract note ↔ order matching
+├── contractnote/    # PDF upload, Claude extraction, contract note ↔ order matching
 ├── web/             # REST controllers, request/response DTOs
 │   └── error/       # Global exception handler (problem+json)
 └── Application.java
@@ -179,6 +182,8 @@ Because imports are manual, the rule can stay simple: **local edits win**.
   gone up since, the order is flagged with `sync_conflict = true` and shown with a badge, so
   the change can be checked.
 - **"Revert"** on an order discards the local edits and restores the last imported values.
+- **Deleting** an order removes it from the local database. The next import of that day brings it
+  back as a fresh order, which is how you "start over" (statuses never go backwards, see 4.4.1).
 
 ### 4.4 Modifying data
 
@@ -186,25 +191,25 @@ Because imports are manual, the rule can stay simple: **local edits win**.
   allocations must add up to the order `value`, and amounts must be valid decimals.
 - An `@Version` column prevents saving stale data, e.g. when the same order is edited in two
   browser tabs (HTTP 409 and a "reload" message).
-- **Delete** is a soft delete (`deleted_at`), so a re-import does not bring the order back.
-  Deleted orders can be shown and restored with a filter.
+- **Delete** removes the order, its allocations and status history. A linked contract note is
+  kept and goes back to the *Unmatched Contract Notes* list. Re-importing brings the order back
+  as a new order ("start over").
 - Optional later: a full field-level change history per order (Hibernate Envers).
 
 ### 4.4.1 Order status workflow
 
 ```
-            blue button       blue button     contract note match     blue button
-   NEW ──────────────▶ ON_MARKET ───────────▶ TRADED ───────────────▶ CONFIRMED ─────────────▶ ALLOCATED
-                                               ▲                         │
-                                               └──── unmatch note ───────┘
+         blue button         blue button       contract note match      blue button
+  NEW ─────────────▶ ON_MARKET ─────────────▶ TRADED ───────────────▶ CONFIRMED ─────────────▶ ALLOCATED
 ```
+
+Statuses only ever move **forward**. To undo a mistake, delete the order and start over (4.4).
 
 | From | To | How | Side effects |
 |---|---|---|---|
 | `NEW` | `ON_MARKET` | Blue button (row or bulk) | – |
 | `ON_MARKET` | `TRADED` | Blue button (row or bulk) | Sets `traded_date` = today (editable) and `settlement_date` = traded date + `asset.settlement_duration` business days |
 | `TRADED` | `CONFIRMED` | **Automatic only**, when a contract note is matched to the order (4.4.2). The blue button is disabled with a tooltip "waiting for contract note" | Links the contract note |
-| `CONFIRMED` | `TRADED` | Unmatching the contract note (⋯ menu) | Unlinks the note |
 | `CONFIRMED` | `ALLOCATED` | Blue button (row or bulk) | Final status; the blue button is hidden |
 
 - The rules live in one place in the backend (a small state machine in `OrderStatusService`).
@@ -213,59 +218,124 @@ Because imports are manual, the rule can stay simple: **local edits win**.
 - Each request contains the status the user saw, so a double click cannot skip a step
   (HTTP 409 if the order has already moved on).
 - **Bulk "move status forward"** moves every ticked order one step. Orders that can't move
-  (`TRADED` waiting for a note, `ALLOCATED`, deleted) are skipped. The result shows how many
-  moved and which were skipped and why.
+  (`TRADED` waiting for a note, `ALLOCATED`) are skipped. The result shows how many moved and
+  which were skipped and why.
 - Every change is written to `order_status_history` (from, to, when, triggered by
   `USER` / `CONTRACT_NOTE` / `IMPORT`). It is shown in the order drawer.
-- **Imports and status:** Sharpfin's `status` value is mapped to these statuses on import
-  (`new` → `NEW`; other values to be mapped once seen). After the status has been changed
-  locally, imports don't overwrite it any more (it counts as a local edit, see 4.3).
+- **Sharpfin statuses on import:**
 
-### 4.4.2 Contract notes and matching
+  | Sharpfin `status` | Local status |
+  |---|---|
+  | `new` | `NEW` |
+  | `on_market` | `ON_MARKET` |
+  | `traded` | `TRADED` |
+  | `finalized` | `ALLOCATED` (assumption, to be confirmed) |
 
-A contract note is the broker's or custodian's confirmation of an executed trade. Matching
-one to a `TRADED` order confirms that order.
+  An import can move a status forward but never back. A Sharpfin `traded` order still needs a
+  contract note to become `CONFIRMED`.
 
-- **Input:** how contract notes arrive is still open (see open questions). The plan starts with
-  **manual entry** in the UI and adds file import (CSV/Excel/PDF) once a sample exists.
-- **Automatic matching**, run when a note is saved, and with a "Match again" button for
-  unmatched notes. A candidate order must:
-  - have status `TRADED` and not be deleted or already matched
-  - have the same ISIN, side (buy/sell) and currency
-  - have the same custody, when the note names one
-  - have the same quantity (or amount, for amount orders)
-  - have the same trade date, when the order has one
-  - have a price within a small tolerance (configurable, default 0)
+### 4.4.2 Contract notes: upload, reading with Claude, matching
 
-  Exactly one candidate → it is matched and the order becomes `CONFIRMED`. No candidate or
-  several → the note stays `UNMATCHED` and the user picks the order by hand from a short list
-  of the closest candidates.
-- **Manual match / unmatch** from both sides: from the note (pick an order) and from the order
-  (⋯ menu).
-- Differences between note and order (e.g. commission, settlement amount) are shown side by
-  side. Whether the note's values should overwrite the order's values is an open question.
+A contract note is the broker's confirmation of an executed trade, delivered as a **PDF** whose
+layout differs per broker. Every note contains: **name** (instrument), **ISIN**, **currency**,
+**quantity**, **price**, **settlement amount**, **broker** and **commission**.
+
+**Flow**
+
+```
+tick orders ─▶ drop PDFs in the bulk-action area ─▶ POST /contract-notes (multipart)
+   ─▶ store PDF + SHA-256 (duplicate files are rejected)
+   ─▶ Claude reads the PDF ─▶ typed fields (ContractNoteExtraction)
+   ─▶ validate fields ─▶ match against the ticked orders
+        ├─ exactly one match ─▶ note linked to the order, order → CONFIRMED, green lamp
+        └─ otherwise          ─▶ note goes to "Unmatched Contract Notes" with the reason
+```
+
+Several PDFs can be dropped at once. Each is processed on its own, and the result is shown
+per file.
+
+**Reading the PDF with Claude** (`ContractNoteExtractor`)
+
+- One Messages API call per PDF, using the official Java SDK (`com.anthropic:anthropic-java`):
+  - model `claude-opus-5-5`
+  - the PDF sent as a base64 `document` block
+  - a short instruction that also says how sign and decimal conventions vary between brokers
+  - **structured output** bound to a Java record, so the answer is always valid JSON in the
+    expected shape:
+
+  ```java
+  record ContractNoteExtraction(
+      String instrumentName, String isin, String currency,
+      String quantity, String price, String settlementAmount,
+      String broker, String commission,
+      String side,       // "buy" | "sell" | null if not stated
+      String tradeDate,  // ISO date or null if not stated
+      List<String> warnings) {}   // e.g. "two trades on one note", "illegible amount"
+  ```
+
+  Numbers are returned as strings and parsed to `BigDecimal` in Java, so no rounding happens
+  on the way.
+- **Validation after extraction:** ISIN format and check digit, a 3-letter currency, numbers
+  that parse, and `quantity × price` ≈ settlement amount ± commission. If any check fails, the
+  note goes to the unmatched list with the reason, and the values can be corrected by hand.
+- The raw JSON answer and the model ID are stored with the note for traceability.
+- **Configuration:** `ANTHROPIC_API_KEY` as an environment variable (never in git). Timeouts
+  and SDK retries are on. Refusals fall back to another model via the API's server-side
+  fallback option.
+- **Cost:** roughly a few cents per 1–2 page PDF (input $4 / output $20 per million tokens).
+- **Testability:** the extractor sits behind an interface. Tests use a fake extractor with
+  fixed results. A small set of real, anonymised PDFs checks the extraction quality by hand.
+
+**Matching rules**
+
+Candidates are the **ticked orders** that have status `TRADED` and no linked note. All of these
+must hold:
+
+| Field | Rule |
+|---|---|
+| ISIN | equal |
+| Currency | equal |
+| Quantity | equal (for amount-type orders: the order `value` is compared with the settlement amount instead) |
+| Price | **exactly** equal (after normalising decimals, e.g. `435.5` = `435.520`) |
+| Settlement amount | equal within **± 1 unit** of the currency (1 SEK, 1 EUR, …), comparing absolute values because brokers use different sign conventions |
+| Side | equal, when the note states it |
+
+The name and the broker are not used for matching. The broker is stored as the order's
+**Counterpart**.
+
+- **Exactly one** candidate → match: the note is linked to the order (one note per order,
+  enforced by a unique key), the order becomes `CONFIRMED`, and the **Contract Note Match**
+  lamp turns green.
+- **None or several** → the note goes to **Unmatched Contract Notes** with the reason, e.g. "no
+  ticked order with ISIN CH0012221716", "price 435.50 ≠ 435.52", "settlement amount differs
+  by 3.20 SEK", "order not yet TRADED".
+- From the unmatched list a note can be matched again. This time the candidates are all
+  `TRADED` orders without a note, and the same rules apply. Values can be corrected first, and
+  notes can be deleted.
 
 ### 4.5 REST API
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/orders?page=&size=&sort=&dateType=booked\|traded\|settled&from=&to=&asset=&portfolio=&owner=&status=&custody=&includeDeleted=` | Paged, sortable, filterable order list (server-side, matching the mockup's toolbar) |
+| GET | `/api/v1/orders?page=&size=&sort=&dateType=booked\|traded\|settled&from=&to=&asset=&portfolio=&owner=&status=&custody=&noteMatch=` | Paged, sortable, filterable order list (server-side, matching the mockup's toolbar) |
 | GET | `/api/v1/orders/{id}` | Order detail including allocations |
 | PATCH | `/api/v1/orders/{id}` | Edit order fields (requires `version`) |
 | PUT | `/api/v1/orders/{id}/allocations` | Replace allocations (validated: sum = order value) |
 | POST | `/api/v1/orders` | Create an order manually ("Create new" button) |
-| DELETE | `/api/v1/orders/{id}` | Soft delete |
+| DELETE | `/api/v1/orders/{id}` | Delete (a linked note becomes unmatched) |
 | POST | `/api/v1/orders/{id}/status/advance` (body: `expectedStatus`) | Blue button: move to the next status (4.4.1) |
 | GET | `/api/v1/orders/{id}/status-history` | Status changes of an order |
 | POST | `/api/v1/orders/bulk` (body: `ids`, `action` = `DELETE` \| `ADVANCE_STATUS`) | Actions on the ticked rows; returns per-order result (done / skipped + reason) |
 | POST | `/api/v1/orders/{id}/revert` | Discard local edits and restore the last imported values |
 | GET | `/api/v1/custodies`, `/api/v1/assets`, `/api/v1/portfolios` | Reference data for filters and drop-downs |
-| GET | `/api/v1/contract-notes?status=&from=&to=&q=` | Contract note list |
-| POST | `/api/v1/contract-notes` | Enter a contract note; automatic matching runs right away |
-| PATCH / DELETE | `/api/v1/contract-notes/{id}` | Edit / delete a note (an unmatched one only) |
-| GET | `/api/v1/contract-notes/{id}/candidates` | Orders that could match this note, best first |
-| POST | `/api/v1/contract-notes/{id}/match` (body: `orderId`) | Manual match → order `CONFIRMED` |
-| POST | `/api/v1/contract-notes/{id}/unmatch` | Undo a match → order back to `TRADED` |
+| POST | `/api/v1/contract-notes` (multipart: `files[]`, `orderIds[]`) | Upload PDFs from the bulk-action area → extract → match against the given orders; result per file |
+| GET | `/api/v1/contract-notes?status=UNMATCHED` | Unmatched Contract Notes list |
+| GET | `/api/v1/contract-notes/{id}` | Note with extracted fields, reason and match result |
+| GET | `/api/v1/contract-notes/{id}/file` | The original PDF (for preview) |
+| PATCH | `/api/v1/contract-notes/{id}` | Correct extracted values (unmatched notes only) |
+| POST | `/api/v1/contract-notes/{id}/rematch` | Try matching again against all `TRADED` orders without a note |
+| DELETE | `/api/v1/contract-notes/{id}` | Delete an unmatched note |
+| GET | `/api/v1/orders/{id}/contract-note` | The note linked to an order |
 | POST | `/api/v1/imports` (body: `fromDate`, `toDate`) | Run an import now |
 | GET | `/api/v1/imports` | Import history |
 
@@ -363,7 +433,7 @@ CREATE TABLE orders (                                      -- "order" is a reser
     last_synced_at            TIMESTAMPTZ,
     raw_payload               JSONB,                       -- last imported order, used for "revert"
     version                   INTEGER NOT NULL DEFAULT 0,  -- optimistic locking for local edits
-    deleted_at                TIMESTAMPTZ
+    counterpart               VARCHAR(200)                 -- broker, filled from the matched contract note
 );
 CREATE INDEX ix_orders_booked_date ON orders(booked_date);
 CREATE INDEX ix_orders_traded_date ON orders(traded_date);
@@ -392,28 +462,32 @@ CREATE TABLE order_status_history (
     note         TEXT
 );
 
-CREATE TABLE contract_note (                   -- fields refined once a real sample exists
+CREATE TABLE contract_note (
     id                 BIGSERIAL PRIMARY KEY,
-    reference          VARCHAR(100),           -- broker's note / trade reference
-    custody_id         BIGINT REFERENCES custody(id),
-    counterpart        VARCHAR(200),           -- broker
-    isin               VARCHAR(12)   NOT NULL,
-    side               VARCHAR(10)   NOT NULL, -- buy | sell
+    file_name          VARCHAR(300)  NOT NULL,
+    file_sha256        CHAR(64)      NOT NULL UNIQUE,   -- rejects uploading the same PDF twice
+    file_content       BYTEA         NOT NULL,          -- the PDF itself (small files, single user)
+    -- fields read by Claude (editable while unmatched)
+    instrument_name    VARCHAR(300),
+    isin               VARCHAR(12),
+    currency_code      CHAR(3),
     quantity           NUMERIC(24,8),
     price              NUMERIC(24,8),
-    amount             NUMERIC(24,8),          -- settlement amount
-    commission         NUMERIC(24,8) NOT NULL DEFAULT 0,
-    currency_code      CHAR(3)       NOT NULL,
-    trade_date         DATE          NOT NULL,
-    settlement_date    DATE,
-    status             VARCHAR(20)   NOT NULL, -- UNMATCHED | MATCHED
-    order_id           BIGINT UNIQUE REFERENCES orders(id),   -- one note ↔ one order (to be confirmed)
+    settlement_amount  NUMERIC(24,8),
+    broker             VARCHAR(200),
+    commission         NUMERIC(24,8),
+    side               VARCHAR(10),                     -- if stated on the note
+    trade_date         DATE,                            -- if stated on the note
+    extraction_json    JSONB,                           -- raw answer from Claude
+    extraction_model   VARCHAR(50),                     -- e.g. claude-opus-5-5
+    -- matching
+    status             VARCHAR(20)   NOT NULL,          -- MATCHED | UNMATCHED | EXTRACTION_FAILED
+    unmatched_reason   TEXT,
+    order_id           BIGINT UNIQUE REFERENCES orders(id) ON DELETE SET NULL,  -- one note ↔ one order
     matched_at         TIMESTAMPTZ,
-    match_type         VARCHAR(10),            -- AUTO | MANUAL
-    source_file        VARCHAR(300),           -- when imported from a file
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at         TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
-CREATE INDEX ix_contract_note_match ON contract_note(isin, side, trade_date);
+CREATE INDEX ix_contract_note_status ON contract_note(status);
 
 CREATE TABLE import_run (
     id             BIGSERIAL PRIMARY KEY,
@@ -447,6 +521,10 @@ CREATE TABLE import_run (
   machines on the network.
 - The Sharpfin credentials live in an environment variable or in a git-ignored
   `application-local.yml`, never in git.
+- The Claude API key (`ANTHROPIC_API_KEY`) is also an environment variable.
+- **Contract-note PDFs are sent to the Claude API** (Anthropic) to be read. They can contain client
+  names and account numbers. Check that this is acceptable under your company's data-protection
+  rules before using real notes.
 - The database contains personal data (client names in portfolios, owner email). It stays on the
   Mac, the database password is local-only, and full API payloads are not written to log files.
 
@@ -467,11 +545,14 @@ frontend/src/
 │   ├── OrdersTable.jsx      # the main table
 │   ├── OrderDrawer.jsx      # create / edit order + allocations + status history
 │   ├── StatusButton.jsx     # blue "next status" button
-│   ├── ContractNoteDrawer.jsx # enter / edit note, pick matching order
+│   ├── BulkActionBar.jsx    # appears when rows are ticked: status forward, delete, PDF drop area
+│   ├── ContractNoteDropzone.jsx # antd Upload.Dragger, multiple PDFs, per-file result
+│   ├── NoteMatchLamp.jsx    # green / grey lamp + popover with the note
+│   ├── ContractNoteDrawer.jsx # PDF preview next to extracted fields, correct + rematch
 │   └── ImportDialog.jsx     # date range → run import → result counts
 ├── pages/
 │   ├── OrdersPage.jsx       # tab "Orders"
-│   ├── ContractNotesPage.jsx # tab "Contract notes"
+│   ├── UnmatchedNotesPage.jsx # tab "Unmatched Contract Notes"
 │   └── ImportsPage.jsx      # tab "Imports" (import history)
 ├── App.jsx
 └── main.jsx
@@ -484,7 +565,7 @@ frontend/src/
 | Dark left sidebar with modules (Dashboard, Wealth Management, …) | Same style, but only the module this app has: **Order Management**. The other entries are left out |
 | Header "Order Management", user name/role top right, "EN" | Same. The user name is a fixed setting (one user); language is English only |
 | "STAGE" badge | Shows which Sharpfin environment the data was imported from (e.g. `demo2`) |
-| Tabs **Orders** / **Rebalance** | **Orders** / **Contract notes** / **Imports** (import history). There is no rebalancing in this app |
+| Tabs **Orders** / **Rebalance** | **Orders** / **Unmatched Contract Notes** (with a count badge) / **Imports** (import history). There is no rebalancing in this app |
 
 ### 5.2 Toolbar → API filters
 
@@ -495,7 +576,8 @@ frontend/src/
 | Three icon toggles next to the date range | Choose which date the range filters on: **Booked** / **Traded** / **Settled** (one active at a time, default Booked) | `dateType` |
 | Date range `2026-10-07 – 2026-10-07` | Range on the chosen date, default today | `from`, `to` |
 | Owner / Status / Custody drop-downs | Multi-select, options filled from the stored data | `owner`, `status`, `custody` |
-| Eye-slash toggle | Show deleted orders | `includeDeleted` |
+| Eye-slash toggle | Left out, because deleted orders are removed (4.4) | – |
+| *(new)* Contract Note Match filter | All / Matched / Not matched | `noteMatch` |
 | **Create new** | Opens the order drawer empty | `POST /orders` |
 | *(new)* **Import from Sharpfin** | Opens the import dialog. Placed next to "Create new" | `POST /imports` |
 
@@ -516,8 +598,9 @@ frontend/src/
 | Commission | `commission` | |
 | Curr | `currency_code` | |
 | Owner | `owner.name` | ✓ |
-| Counterpart | `broker` (empty in the current data) | |
+| Counterpart | Broker from the matched contract note (Sharpfin `broker` if set) | |
 | Custody | `custody.name` | |
+| **Contract Note Match** *(new)* | 🟢 green lamp when a note is matched, grey otherwise. Clicking the lamp opens the note (PDF + extracted values) next to the order | ✓ |
 | ⚙ (header) | Show/hide columns; the choice is remembered in the browser | – |
 
 Numbers are right-aligned with thousands separators and 2 decimals (`811,809.28`), as in the
@@ -530,25 +613,43 @@ mockup. The table is server-side paged with page size 10 and a size picker, as i
 | Blue (phone) | **Move status forward** (4.4.1). Tooltip names the step ("Send to market", "Mark traded", "Mark allocated"); disabled for `TRADED` ("waiting for contract note"); hidden for `ALLOCATED` |
 | Green (Excel) | Left out (not needed for this app) |
 | Pencil | Opens the **order drawer**: order fields plus an allocations table (portfolio, value) with a running total that must match the order value. Save / Cancel |
-| ⋯ (more) | Show/unmatch contract note, Revert to imported values, Delete / Restore, Show conflict details |
+| ⋯ (more) | Show contract note, Revert to imported values, Delete, Show conflict details |
 
-**Bulk actions** for ticked rows, shown above the table when rows are ticked: **Move status
-forward** and **Delete**, both asking for confirmation and then showing the result (moved /
-skipped with reason).
+**Bulk-action area** (appears above the table when rows are ticked):
 
-### 5.5 Contract notes tab
+```
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│ 3 orders selected   [ Move status forward ]  [ Delete ]                           │
+│ ┌───────────────────────────────────────────────────────────────────────────────┐ │
+│ │   ⇪  Drop contract note PDFs here or click to choose files                    │ │
+│ │      They are read by Claude and matched against the 3 selected orders        │ │
+│ └───────────────────────────────────────────────────────────────────────────────┘ │
+│ ✔ nordnet_abb.pdf      → matched with ABB (sell 1,864 @ 435.52), order confirmed  │
+│ ✖ nordnet_tesla.pdf    → not matched: price 750.10 ≠ 750.17  [open]               │
+└───────────────────────────────────────────────────────────────────────────────────┘
+```
 
-Same look as the orders table. The columns are trade date, reference, ISIN/asset, side,
-quantity, price, amount, commission, currency, custody, counterpart, status
-(Unmatched / Matched) and the matched order. Actions:
+- **Move status forward** and **Delete** ask for confirmation, then show the result
+  (moved / skipped with reason).
+- The **drop area** (antd `Upload.Dragger`) takes several PDFs at once. A spinner shows per file
+  while Claude reads it, which takes a few seconds per note. Afterwards each file shows its
+  result, and the table refreshes, so matched orders show the green lamp and status Confirmed.
 
-- **New contract note**: a form. Saving runs the automatic match at once and shows the result:
-  "matched with order …" or "no unique match".
-- **Match** on an unmatched note: a drawer listing the candidate orders, best match first,
-  with differing fields highlighted. Picking one confirms the order.
-- **Unmatch** on a matched note: the order goes back to `TRADED`.
+### 5.5 Unmatched Contract Notes
+
+A tab with a count badge, styled like the orders table. The columns are file name, upload time,
+name, ISIN, currency, quantity, price, settlement amount, broker, commission and **reason
+not matched**.
+
+- Clicking a row opens a drawer with the **PDF preview on the left** and the **extracted fields on
+  the right**, plus the closest orders and the fields that differ.
+- **Correct** fields (e.g. when Claude misread a value) → **Match again**. This tries all
+  `TRADED` orders without a note.
+- **Delete** the note, e.g. when the wrong file was uploaded.
 
 ---
+
+## 6.---
 
 ## 6. Repository Layout & Running on the Mac
 
@@ -589,8 +690,8 @@ ContractNoteManager/
 | **1. Data model** | Flyway migrations and JPA entities from 4.6 (incl. status history and contract notes) | Migrations run cleanly; repository tests green (Testcontainers) |
 | **2. Import** | Sharpfin client, paging, mapping, upsert, import log, `POST /imports` | An import (against WireMock and the real API) fills the DB; importing again doesn't duplicate |
 | **3. REST API** | Order list/detail/edit/allocations/delete/revert, status workflow, bulk actions, validation, error handling | Integration tests green, incl. every allowed and forbidden status step; usable in Swagger UI |
-| **3b. Contract notes** | Contract note CRUD, automatic + manual matching, unmatch | Tests cover unique match, no match, several candidates, unmatch |
-| **4. UI** | Orders tab as in the mockup, order drawer, status button and bulk actions, contract notes tab, import dialog, import history | The full flow works in the browser: import → send to market → traded → enter contract note → auto-confirmed → allocated |
+| **3b. Contract notes** | PDF upload, Claude extraction (Java SDK, structured output), validation, matching rules, unmatched list API | Tests cover unique match, no match, several candidates, price exact, settlement ± 1, duplicate file; the extraction is checked on real, anonymised PDFs |
+| **4. UI** | Orders tab as in the mockup, order drawer, status button and bulk actions, contract notes tab, import dialog, import history | The full flow works in the browser: import → send to market → traded → tick orders → drop PDFs → auto-confirmed with green lamp → allocated; unmatched notes corrected and re-matched |
 | **5. Polish** | Single-JAR packaging, `start.sh`, backup script, optional change history | Runs with one command on the Mac |
 
 Phases 2 and 3 can be built in parallel. Phase 4 can start as soon as the API in 4.5 is fixed.
@@ -599,21 +700,19 @@ Phases 2 and 3 can be built in parallel. Phase 4 can start as soon as the API in
 
 ## 8. Open Questions
 
-1. **Sharpfin authentication:** how does a call to `demo2.sharpfin.com/api/...` authenticate?
-   An API key, a bearer token, or a browser session cookie? (Needed for phase 2.)
+1. **Sharpfin login:** the credentials (username/password) are known and will be set as the
+   environment variables `SHARPFIN_USERNAME` / `SHARPFIN_PASSWORD` (never in git). Still open:
+   *how* the API takes them. HTTP Basic, or a login request that returns a session cookie or a
+   token? The browser's developer tools (Network tab, when logging in to demo2) show which.
 2. **Editable fields:** which order fields should be editable? For example price, commission,
    fees, allocations, comment, or everything?
 3. **Write-back:** should edits or status changes ever be sent back to Sharpfin? (Not decided
    yet; the design keeps it possible.)
-4. **Where do contract notes come from?** Entered by hand, files from the broker/custodian
-   (PDF, CSV, Excel, e-mail), or an API? A sample would define the fields and the file import.
-5. **Matching rules:** are the criteria in 4.4.2 right (ISIN, side, currency, custody,
-   quantity/amount, trade date, price tolerance)? Should a price difference be allowed?
-6. **One-to-one?** Can one contract note cover several orders, or one order be confirmed by
-   several notes (e.g. partial fills)? The plan assumes one note ↔ one order.
-7. **After a match:** should the note's price, commission and settlement amount overwrite the
-   order's values, or only be shown next to them?
-8. **Moving a status back:** apart from unmatching a note, should it be possible to step a status
-   back by mistake (e.g. On market → New)?
-9. **Other Sharpfin statuses:** besides `new`, which status values can the API return, and how
-   do they map to the five statuses?
+4. **`finalized`:** does Sharpfin's `finalized` correspond to `ALLOCATED`?
+5. **After a match:** should the note's commission and settlement amount overwrite the order's
+   values, or only be shown next to them? (The plan shows them next to the order and only copies
+   the broker into *Counterpart*.)
+6. **Data protection:** is it acceptable to send contract-note PDFs (client data) to the Claude
+   API, or should the notes be anonymised or the provider checked first?
+7. **Sample PDFs:** two or three real (anonymised) contract notes from different brokers to test
+   the extraction.
