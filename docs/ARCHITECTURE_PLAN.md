@@ -117,17 +117,44 @@ GET https://demo2.sharpfin.com/api/orders/paginated
 | `type` | `instrument` | Fixed; configurable in case other order types are needed later |
 | `date_type` | `active` | Which date `from_date`/`to_date` filter on |
 | `page`, `page_size` | `1`, `10` | Loop pages until all are read; use a larger page size (e.g. 100–500) if the API allows it |
-| `no_of_elements` | `0` | Probably a total-count hint. Send `0` on the first call and read the total from the response (to be confirmed) |
+| `no_of_elements` | `0` | Sent as `0`; the response returns the real total |
 | `sort_field`, `sort_direction` | `booked_date`, `asc` | Keep a stable sort so records don't move between pages while paging |
 | `from_date`, `to_date` | today | Default: import a configurable window (e.g. today, or last N days) and allow a manual date range from the UI |
 | `status`, `owner_key` | `all` | Import everything; filtering happens in our UI |
 | `active_orders` | `true` | Configurable |
 | `include_deleted` | `false` | Consider `true` so orders deleted at the source can be marked deleted locally |
 
-The main stored entity is therefore an **order** (instrument order). The table in 4.6 becomes
-`orders`, keyed by the Sharpfin order ID, with columns taken from the response payload.
-Still needed: a sample response (field names and types, where the total count is), and how the
-API authenticates (API key, bearer token, session cookie).
+**Response envelope** (from a sample response):
+
+```json
+{ "no_of_pages": 2, "no_of_elements": 19, "page_size": 10, "page": 1,
+  "sort_field": "booked_date", "sort_direction": "asc", "no_of_updatable": 19,
+  "orders": [ { ...order... } ] }
+```
+
+Paging algorithm: request `page=1`, read `no_of_pages`, then fetch pages `2..no_of_pages`.
+After the loop, check that the number of orders received equals `no_of_elements`, and mark the
+run `PARTIAL` if it doesn't. Orders can be added while the import is paging, so orders are
+upserted by `key`, which makes it harmless to see one twice.
+
+**Observations about the payload that shape the design:**
+
+| Observation | Consequence |
+|---|---|
+| All IDs are opaque `key` strings (Base64 of a 64-bit integer, e.g. `LTU3MDIz…` = `-570235573997296708`) | Store as `VARCHAR(64)` and never decode or interpret them; our tables use their own surrogate `id` |
+| Amounts and prices are **strings** (`"435.52"`, `"-12109.86"`) | Parse to `BigDecimal` and store as `NUMERIC`, never `double` |
+| Each order has a `version` (e.g. `1`) | Import change detection: update an order only when the remote `version` is higher than the one stored (see 4.3) |
+| `custody`, `asset` and `owner` are full objects repeated in every order | Normalise them into reference tables, upserted by `key` |
+| `allocation[].key` is the **portfolio** key (same key for "Kattegatt AB" in every order), not an allocation ID | An allocation is identified by order + portfolio |
+| `allocation[].value` adds up to the order `value` (1761 + 103 = 1864) | Validation rule when allocations are edited |
+| `type` = `quantity` → `value` is a number of units; `type` = `amount` → `value` is a cash amount | The UI labels and validates `value` according to `type` |
+| `settlement_amount` ≈ `price × value`, positive for `sell` and negative for `buy` | Shown as a cash flow; can be recalculated (and checked) after edits |
+| `asset.type` varies (`equity`, `fund`); funds carry extra `type_data` | Store the common columns and keep `type_data` as `JSONB` |
+| `broker` and `exchange` are empty objects in the sample | Store as nullable `JSONB` until real data shows their structure |
+| `custody.contract_notes_enabled` exists | Probably relevant for producing contract notes per custody (see open questions) |
+| The payload contains personal data (owner name/email, client names in `portfolio_name`) | GDPR: restrict access, never log full payloads, and use only anonymised samples as test data |
+
+Still needed: how the API authenticates (API key, bearer token, session cookie) and any rate limits.
 
 ### 4.3 Handling local modifications vs. re-imports (important decision)
 
@@ -152,42 +179,125 @@ so the user can review it in the UI. To be confirmed.
 - Soft delete (`deleted_at`) for imported records, so a re-import does not resurrect deleted rows
   unintentionally.
 
-### 4.5 REST API (draft – finalised once the data model is known)
+### 4.5 REST API (draft)
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/contract-notes?page=&size=&sort=&filter=` | Paged, sortable, filterable list |
-| GET | `/api/v1/contract-notes/{id}` | Detail |
-| POST | `/api/v1/contract-notes` | Create manually |
-| PUT / PATCH | `/api/v1/contract-notes/{id}` | Update (requires version) |
-| DELETE | `/api/v1/contract-notes/{id}` | (Soft) delete |
-| POST | `/api/v1/sync` | Trigger import now |
+| GET | `/api/v1/orders?page=&size=&sort=&bookedFrom=&bookedTo=&status=&side=&custody=&asset=&q=` | Paged, sortable, filterable order list |
+| GET | `/api/v1/orders/{id}` | Order detail including allocations |
+| PATCH | `/api/v1/orders/{id}` | Edit order fields (requires `version`) |
+| PUT | `/api/v1/orders/{id}/allocations` | Replace allocations (validated: sum = order value) |
+| DELETE | `/api/v1/orders/{id}` | Soft delete |
+| POST | `/api/v1/orders/{id}/revert` | Discard local edits and restore the last imported values |
+| GET | `/api/v1/custodies`, `/api/v1/assets`, `/api/v1/portfolios` | Reference data for filters and drop-downs |
+| POST | `/api/v1/sync` (body: `fromDate`, `toDate`) | Trigger import now |
 | GET | `/api/v1/sync/runs` | Import history and status |
 | GET | `/actuator/health` | Health check |
 
 Errors are returned as `application/problem+json`. The OpenAPI spec is published at
 `/v3/api-docs` and used to generate the TypeScript client.
 
-### 4.6 Data model (placeholder)
+### 4.6 Data model
 
-The real entities depend on the external API's payload. Starting skeleton:
+Derived from the sample response. Every table also gets the audit columns `created_at`,
+`updated_at`, `created_by`, `updated_by` (left out below for brevity).
+
+```
+custody 1──* orders *──1 asset
+owner   1──* orders
+orders  1──* order_allocation *──1 portfolio
+```
 
 ```sql
-CREATE TABLE contract_note (
-    id               BIGSERIAL PRIMARY KEY,
-    external_id      VARCHAR(100) UNIQUE,      -- NULL for manually created records
-    -- business columns derived from the API payload go here
-    source           VARCHAR(20)  NOT NULL,    -- 'API' | 'MANUAL'
-    locally_modified BOOLEAN      NOT NULL DEFAULT FALSE,
-    sync_conflict    BOOLEAN      NOT NULL DEFAULT FALSE,
-    last_synced_at   TIMESTAMPTZ,
-    raw_payload      JSONB,                    -- original API record, for traceability/debugging
-    version          INTEGER      NOT NULL DEFAULT 0,
-    created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    created_by       VARCHAR(100),
-    updated_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    updated_by       VARCHAR(100),
-    deleted_at       TIMESTAMPTZ
+CREATE TABLE custody (
+    id                     BIGSERIAL PRIMARY KEY,
+    sf_key                 VARCHAR(64)  NOT NULL UNIQUE,   -- Sharpfin "key"
+    name                   VARCHAR(200) NOT NULL,          -- "Nordnet"
+    tag                    VARCHAR(100),
+    domicile               CHAR(2),
+    contract_notes_enabled BOOLEAN      NOT NULL DEFAULT FALSE,
+    deleted                BOOLEAN      NOT NULL DEFAULT FALSE,
+    raw_payload            JSONB                           -- all remaining custody settings
+);
+
+CREATE TABLE asset (
+    id                        BIGSERIAL PRIMARY KEY,
+    sf_key                    VARCHAR(64)  NOT NULL UNIQUE,
+    name                      VARCHAR(300) NOT NULL,       -- "ABB", "AMF Räntefond Lång"
+    type                      VARCHAR(30)  NOT NULL,       -- equity | fund | ...
+    isin                      VARCHAR(12),                 -- from identifiers[key=isin]
+    domicile                  CHAR(2),
+    quote_currency_code       CHAR(3),
+    settlement_currency_code  CHAR(3),
+    settlement_duration       INTEGER,                     -- T+n days
+    classifications           JSONB,                       -- [{key, value}] e.g. "SWE-EQ", "it"
+    type_data                 JSONB,                       -- fund-specific data
+    deleted                   BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE TABLE owner (                                       -- the Sharpfin user owning an order
+    id        BIGSERIAL PRIMARY KEY,
+    sf_key    VARCHAR(64)  NOT NULL UNIQUE,
+    name      VARCHAR(200),
+    email     VARCHAR(320),
+    type      VARCHAR(50)                                  -- "system_user"
+);
+
+CREATE TABLE portfolio (
+    id        BIGSERIAL PRIMARY KEY,
+    sf_key    VARCHAR(64)  NOT NULL UNIQUE,                -- allocation[].key
+    name      VARCHAR(300) NOT NULL                        -- "Kattegatt AB - 150660816"
+);
+
+CREATE TABLE orders (                                      -- "order" is a reserved word
+    id                        BIGSERIAL PRIMARY KEY,
+    sf_key                    VARCHAR(64)  NOT NULL UNIQUE,
+    sf_version                INTEGER      NOT NULL,       -- remote "version", for change detection
+    custody_id                BIGINT       NOT NULL REFERENCES custody(id),
+    asset_id                  BIGINT       NOT NULL REFERENCES asset(id),
+    owner_id                  BIGINT       REFERENCES owner(id),
+    status                    VARCHAR(30)  NOT NULL,       -- new | ...
+    order_type                VARCHAR(20)  NOT NULL,       -- quantity | amount
+    side                      VARCHAR(10)  NOT NULL,       -- buy | sell
+    price                     NUMERIC(24,8),
+    value                     NUMERIC(24,8) NOT NULL,      -- units or cash depending on order_type
+    currency_code             CHAR(3)      NOT NULL,
+    settlement_amount         NUMERIC(24,8),
+    commission                NUMERIC(24,8) NOT NULL DEFAULT 0,
+    accrued_interest          NUMERIC(24,8) NOT NULL DEFAULT 0,
+    up_front_fee              NUMERIC(24,8) NOT NULL DEFAULT 0,
+    issuer_fee                NUMERIC(24,8) NOT NULL DEFAULT 0,
+    booked_date               DATE         NOT NULL,
+    valid_to                  DATE,
+    source                    VARCHAR(30),                 -- rebalance | ...
+    comment                   TEXT,
+    partial_fill_allowed      BOOLEAN NOT NULL DEFAULT FALSE,
+    is_merged                 BOOLEAN NOT NULL DEFAULT FALSE,
+    handled_manually          BOOLEAN NOT NULL DEFAULT FALSE,
+    handled_manually_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+    broker                    JSONB,
+    exchange                  JSONB,
+    sf_deleted                BOOLEAN NOT NULL DEFAULT FALSE,
+    -- local bookkeeping
+    locally_modified          BOOLEAN NOT NULL DEFAULT FALSE,
+    sync_conflict             BOOLEAN NOT NULL DEFAULT FALSE,
+    last_synced_at            TIMESTAMPTZ,
+    raw_payload               JSONB,                       -- last imported order, used for "revert"
+    version                   INTEGER NOT NULL DEFAULT 0,  -- optimistic locking for local edits
+    deleted_at                TIMESTAMPTZ
+);
+CREATE INDEX ix_orders_booked_date ON orders(booked_date);
+CREATE INDEX ix_orders_asset       ON orders(asset_id);
+
+CREATE TABLE order_allocation (
+    id            BIGSERIAL PRIMARY KEY,
+    order_id      BIGINT        NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    portfolio_id  BIGINT        NOT NULL REFERENCES portfolio(id),
+    value         NUMERIC(24,8) NOT NULL,
+    status        VARCHAR(30),
+    reason        TEXT,
+    external_id   VARCHAR(100),
+    UNIQUE (order_id, portfolio_id)
 );
 
 CREATE TABLE sync_run (
@@ -196,13 +306,26 @@ CREATE TABLE sync_run (
     finished_at    TIMESTAMPTZ,
     status         VARCHAR(20) NOT NULL,       -- RUNNING | SUCCESS | PARTIAL | FAILED
     trigger_type   VARCHAR(20) NOT NULL,       -- SCHEDULED | MANUAL
+    from_date      DATE,
+    to_date        DATE,
+    expected_count INTEGER,                    -- no_of_elements reported by the API
     created_count  INTEGER DEFAULT 0,
     updated_count  INTEGER DEFAULT 0,
     skipped_count  INTEGER DEFAULT 0,
+    conflict_count INTEGER DEFAULT 0,
     failed_count   INTEGER DEFAULT 0,
     error_message  TEXT
 );
 ```
+
+**Import rule per order** (strategy A from 4.3):
+
+| Order state in DB | Remote `version` vs stored `sf_version` | Action |
+|---|---|---|
+| not present | – | insert order + allocations |
+| present, not locally modified | higher | overwrite with remote values |
+| present, locally modified | higher | keep local values, set `sync_conflict = true`, store new remote payload for comparison |
+| present | same or lower | skip |
 
 ### 4.7 Security
 
@@ -277,7 +400,7 @@ as soon as the OpenAPI contract of phase 3 is agreed.
 
 ## 8. Open Questions (needed before / during Phase 1)
 
-1. **External API:** endpoint known (see 4.2.1). Still open: sample response payload, authentication method, rate limits.
+1. **External API:** endpoint and response are known (see 4.2.1). Still open: authentication method and rate limits.
 2. **Sync frequency:** on demand only, scheduled (how often), or both? Data volume (records per run)?
 3. **Edit vs. re-import conflict strategy:** A, B or C from section 4.3?
 4. **Database:** is PostgreSQL fine, or is there an existing company DB (SQL Server, Oracle, MySQL)?
@@ -286,3 +409,7 @@ as soon as the OpenAPI contract of phase 3 is agreed.
 7. **Frontend language:** TypeScript (recommended) or plain JavaScript?
 8. **Mockup:** please share it (image/PDF/Figma) – it determines screens and component library.
 9. **Write-back:** should changes ever be pushed back to the external API, or is the DB the end of the line?
+10. **Which fields are editable?** E.g. price, commission, fees, allocations, comment, status – or everything?
+11. **Contract notes:** given the project name and `custody.contract_notes_enabled`, should the app
+    later *produce* contract notes (e.g. one PDF per order allocation / portfolio)? That would add a
+    `contract_note` table and a document generator to the plan.
