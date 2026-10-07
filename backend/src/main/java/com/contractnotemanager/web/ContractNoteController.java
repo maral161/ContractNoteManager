@@ -98,10 +98,13 @@ public class ContractNoteController {
         return notes.reread(id);
     }
 
-    /** Partially matched note: take its price, quantity, commission and broker into the linked order. */
+    public record ApplyRequest(java.util.Set<ContractNoteService.OrderField> fields) {
+    }
+
+    /** Partially matched note: overwrite the chosen properties of the linked order with the note's values. */
     @PostMapping("/{id}/apply-to-order")
-    public UploadResult applyToOrder(@PathVariable Long id) {
-        return notes.applyToOrder(id);
+    public UploadResult applyToOrder(@PathVariable Long id, @RequestBody(required = false) ApplyRequest request) {
+        return notes.applyToOrder(id, request == null ? null : request.fields());
     }
 
     @DeleteMapping("/{id}")

@@ -32,8 +32,14 @@ public final class ContractNoteMatcher {
     private ContractNoteMatcher() {
     }
 
-    /** One of the six checks, with the values compared (shown in the UI). */
-    public record Check(String name, boolean ok, String noteValue, String orderValue) {
+    /**
+     * One of the six checks, with the values compared (shown in the UI). {@code field} names the order
+     * property the note can overwrite (quantity, price, commission), null for the others.
+     */
+    public record Check(String name, boolean ok, String noteValue, String orderValue, String field) {
+        Check(String name, boolean ok, String noteValue, String orderValue) {
+            this(name, ok, noteValue, orderValue, null);
+        }
     }
 
     public record Result(ContractNoteStatus status, Order order, int score, List<Check> checks, String reason) {
@@ -116,15 +122,15 @@ public final class ContractNoteMatcher {
                     plain(o.getValue())));
         } else {
             checks.add(new Check("Quantity", n.quantity().compareTo(o.getValue()) == 0, plain(n.quantity()),
-                    plain(o.getValue())));
+                    plain(o.getValue()), "quantity"));
         }
 
         checks.add(new Check("Price", o.getPrice() != null && n.price().compareTo(o.getPrice()) == 0,
-                plain(n.price()), plain(o.getPrice())));
+                plain(n.price()), plain(o.getPrice()), "price"));
 
         BigDecimal orderCommission = o.getCommission() == null ? BigDecimal.ZERO : o.getCommission();
         checks.add(new Check("Commission", commission.compareTo(orderCommission) == 0, plain(commission),
-                plain(orderCommission)));
+                plain(orderCommission), "commission"));
 
         // Sharpfin's settlement amount does not include commission: compare without it
         BigDecimal noteWithoutCommission = sell ? n.settlementAmount().add(commission)

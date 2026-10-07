@@ -220,11 +220,18 @@ public class ContractNoteService {
 
     // ---------------------------------------------------------------- update the order from the note
 
+    /** Order properties a contract note can overwrite. */
+    public enum OrderField {
+        PRICE, QUANTITY, COMMISSION, BROKER
+    }
+
     /**
-     * Takes price, quantity, commission and broker from a partially matched note into its order, then
-     * evaluates the note again (it becomes Matched when all checks pass).
+     * Overwrites the chosen properties of a partially matched note's order with the note's values
+     * (all four when none are given), then evaluates the note again – it becomes Matched when all checks pass.
      */
-    public UploadResult applyToOrder(Long id) {
+    public UploadResult applyToOrder(Long id, java.util.Set<OrderField> chosen) {
+        java.util.Set<OrderField> fields = chosen == null || chosen.isEmpty()
+                ? java.util.EnumSet.allOf(OrderField.class) : chosen;
         return tx.execute(status -> {
             ContractNote note = find(id);
             if (note.getStatus() != ContractNoteStatus.PARTIALLY_MATCHED || note.getOrder() == null) {
@@ -234,9 +241,14 @@ public class ContractNoteService {
             if (!order.getStatus().isEditable()) {
                 throw ApiException.conflict("The order is " + order.getStatus().label() + " and can no longer be changed");
             }
-            order.setPrice(note.getPrice());
-            order.setCommission(note.getCommission());
-            if (!order.isAmountOrder() && note.getQuantity().compareTo(order.getValue()) != 0) {
+            if (fields.contains(OrderField.PRICE)) {
+                order.setPrice(note.getPrice());
+            }
+            if (fields.contains(OrderField.COMMISSION)) {
+                order.setCommission(note.getCommission());
+            }
+            if (fields.contains(OrderField.QUANTITY) && !order.isAmountOrder()
+                    && note.getQuantity().compareTo(order.getValue()) != 0) {
                 int decimals = order.getAsset().getQtyDecimals() == null ? 0 : order.getAsset().getQtyDecimals();
                 List<BigDecimal> scaled = AllocationMath.scaleQuantities(
                         order.getAllocations().stream().map(OrderAllocation::getValue).toList(),
@@ -248,7 +260,7 @@ public class ContractNoteService {
                 }
                 order.setValue(note.getQuantity());
             }
-            if (note.getBroker() != null) {
+            if (fields.contains(OrderField.BROKER) && note.getBroker() != null) {
                 order.setBroker(brokers.findFirstByNameIgnoreCase(note.getBroker()).orElseGet(() -> {
                     Broker b = new Broker();
                     b.setName(note.getBroker());
@@ -264,7 +276,7 @@ public class ContractNoteService {
                     order.getPrice(), order.getValue()));
             order.setLocallyModified(true);
             orders.saveAndFlush(order);
-            log.info("Order {} updated from contract note {}", order.getId(), note.getFileName());
+            log.info("Order {} updated from contract note {} ({})", order.getId(), note.getFileName(), fields);
             return evaluate(note);
         });
     }

@@ -101,7 +101,10 @@ class WorkflowApiTest extends IntegrationTest {
         assertThat(order.path("status").asText()).isEqualTo("TRADED");
 
         long noteId = result.path("noteId").asLong();
-        JsonNode applied = json.readTree(mvc.perform(post("/api/v1/contract-notes/" + noteId + "/apply-to-order"))
+        JsonNode checks = getJson("/api/v1/contract-notes/" + noteId).path("checks");
+        assertThat(checks.findValuesAsText("field")).containsExactly("quantity", "price", "commission");
+        JsonNode applied = json.readTree(mvc.perform(post("/api/v1/contract-notes/" + noteId + "/apply-to-order")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"fields\": [\"COMMISSION\", \"BROKER\"]}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertThat(applied.path("outcome").asText()).isEqualTo("MATCHED");
         JsonNode updated = getJson("/api/v1/orders/" + apple);

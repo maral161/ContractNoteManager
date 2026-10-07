@@ -69,7 +69,7 @@ The tables are created automatically on the first start.
 | Edit price, commission, counterpart, owner, quantities | pencil → order window → *Save* / *Save and close* (until the order is Confirmed) |
 | Confirm with contract notes | tick the Traded orders → drop the PDFs in the area above the table |
 | Check a match | click the green or orange lamp → PDF, the six checks and the values compared |
-| Partially matched note | open it → *Apply note values to order* (price, quantity, commission, broker) → it becomes Matched |
+| Partially matched note | open it → tick the differing properties under *Overwrite on order* (quantity, price, commission; optionally the counterpart) → *Overwrite selected on order* → the note is checked again and becomes Matched when all six checks pass |
 | Note that did not match | *Contract Notes* → open it → fix the order or correct a misread value → *Re-evaluate* |
 | Notes uploaded before the order was ready | re-evaluated automatically after order edits, status changes and imports; or *Re-evaluate all* |
 | Undo a mistake | ⋯ → *Delete*; the next import brings the order back as a new order |

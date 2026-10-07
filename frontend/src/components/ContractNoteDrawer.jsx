@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { Alert, App, Button, Drawer, Form, Input, Popconfirm, Select, Skeleton, Space, Table, Tag } from 'antd';
+import { useEffect, useState } from 'react';
+import { Alert, App, Button, Checkbox, Drawer, Form, Input, Popconfirm, Select, Skeleton, Space, Table, Tag } from 'antd';
 import { CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -17,19 +17,73 @@ const FIELDS = [
   { name: 'commission', label: 'Commission' },
 ];
 
-/** The six checks with the values compared. */
+const FIELD_KEYS = { quantity: 'QUANTITY', price: 'PRICE', commission: 'COMMISSION' };
+
+/**
+ * The six checks with the values compared. For a partially matched note whose order can still be edited,
+ * each differing property that the note can overwrite (quantity, price, commission) gets a tick box,
+ * plus the broker; one click overwrites the ticked ones on the order and evaluates the note again.
+ */
 function Checks({ note }) {
+  const { message } = App.useApp();
+  const overwritable = note.status === 'PARTIALLY_MATCHED' && note.orderEditable;
+  const defaults = () => new Set((note.checks ?? []).filter((c) => !c.ok && c.field).map((c) => FIELD_KEYS[c.field]));
+  const [selected, setSelected] = useState(defaults);
+  useEffect(() => setSelected(defaults()), [note]); // eslint-disable-line react-hooks/exhaustive-deps
+  const apply = useRefreshingMutation((fields) => api.post(`/api/v1/contract-notes/${note.id}/apply-to-order`, { fields }));
+
   if (!note.checks?.length) return null;
+  const toggle = (key, on) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (on) next.add(key); else next.delete(key);
+    return next;
+  });
+  const columns = [
+    { title: '', dataIndex: 'ok', width: 32, render: (ok) => (ok ? <CheckOutlined className="check-ok" /> : <CloseOutlined className="check-fail" />) },
+    { title: 'Check', dataIndex: 'name' },
+    { title: 'Contract note', dataIndex: 'noteValue', align: 'right' },
+    { title: 'Order', dataIndex: 'orderValue', align: 'right' },
+  ];
+  if (overwritable) {
+    columns.push({
+      title: 'Overwrite on order', key: 'overwrite', width: 140, align: 'center',
+      render: (_, c) => (c.field && !c.ok
+        ? <Checkbox checked={selected.has(FIELD_KEYS[c.field])} onChange={(e) => toggle(FIELD_KEYS[c.field], e.target.checked)} />
+        : null),
+    });
+  }
+  const chosen = [...selected];
+  const labels = { QUANTITY: 'quantity', PRICE: 'price', COMMISSION: 'commission', BROKER: `counterpart (${note.broker})` };
+
   return (
-    <Table className="compare-table" size="small" bordered pagination={false} rowKey="name" dataSource={note.checks}
-      style={{ marginBottom: 12 }}
-      title={() => <b>Checks: {note.matchScore} of {note.checkCount} pass{note.orderLabel ? ` – ${note.orderLabel}` : ''}</b>}
-      columns={[
-        { title: '', dataIndex: 'ok', width: 32, render: (ok) => (ok ? <CheckOutlined className="check-ok" /> : <CloseOutlined className="check-fail" />) },
-        { title: 'Check', dataIndex: 'name' },
-        { title: 'Contract note', dataIndex: 'noteValue', align: 'right' },
-        { title: 'Order', dataIndex: 'orderValue', align: 'right' },
-      ]} />
+    <div style={{ marginBottom: 16 }}>
+      <Table className="compare-table" size="small" bordered pagination={false} rowKey="name" dataSource={note.checks}
+        title={() => <b>Checks: {note.matchScore} of {note.checkCount} pass{note.orderLabel ? ` – ${note.orderLabel}` : ''}</b>}
+        columns={columns} />
+      {overwritable && (
+        <div className="overwrite-bar">
+          {note.broker && (
+            <Checkbox checked={selected.has('BROKER')} onChange={(e) => toggle('BROKER', e.target.checked)}>
+              Also set the order's counterpart to <b>{note.broker}</b>
+            </Checkbox>
+          )}
+          <Popconfirm
+            title="Overwrite the order with the note's values?"
+            description={<div style={{ maxWidth: 320 }}>{chosen.map((k) => labels[k]).join(', ')} of <b>{note.orderLabel}</b> will be set from the contract note. The note is then checked again.</div>}
+            okText="Overwrite" onConfirm={() => apply.mutateAsync(chosen)
+              .then((r) => (r.outcome === 'MATCHED' ? message.success(r.message, 5) : message.warning(r.message, 6)))
+              .catch((e) => message.error(e.message))}
+            disabled={chosen.length === 0}>
+            <Button type="primary" loading={apply.isPending} disabled={chosen.length === 0}>
+              Overwrite selected on order
+            </Button>
+          </Popconfirm>
+        </div>
+      )}
+      {note.status === 'PARTIALLY_MATCHED' && !note.orderEditable && (
+        <p className="muted" style={{ marginTop: 6 }}>The order can no longer be changed, so nothing can be overwritten.</p>
+      )}
+    </div>
   );
 }
 
@@ -44,7 +98,6 @@ function NoteActions({ note, onDone }) {
   const save = useRefreshingMutation((values) => api.patch(`/api/v1/contract-notes/${note.id}`, values));
   const reevaluate = useRefreshingMutation(() => api.post(`/api/v1/contract-notes/${note.id}/reevaluate`));
   const reread = useRefreshingMutation(() => api.post(`/api/v1/contract-notes/${note.id}/reread`));
-  const apply = useRefreshingMutation(() => api.post(`/api/v1/contract-notes/${note.id}/apply-to-order`));
   const remove = useRefreshingMutation(() => api.delete(`/api/v1/contract-notes/${note.id}`));
 
   const report = (result) => {
@@ -63,20 +116,11 @@ function NoteActions({ note, onDone }) {
     }
   };
 
-  const differing = (note.checks ?? []).filter((c) => !c.ok).map((c) => c.name.replace(/ \(.*\)/, ''));
-  const busy = save.isPending || reevaluate.isPending || reread.isPending || apply.isPending;
+  const busy = save.isPending || reevaluate.isPending || reread.isPending;
 
   return (
     <>
       <Space wrap style={{ marginBottom: 16 }}>
-        {note.status === 'PARTIALLY_MATCHED' && (
-          <Popconfirm
-            title="Update the order with the note's values?"
-            description={<div style={{ maxWidth: 320 }}>Price, quantity, commission and broker of <b>{note.orderLabel}</b> are set from the contract note (now different: {differing.join(', ') || '–'}). The note is then checked again.</div>}
-            okText="Update order" onConfirm={() => run(apply)} disabled={!note.orderEditable}>
-            <Button type="primary" loading={apply.isPending} disabled={!note.orderEditable || busy}>Apply note values to order</Button>
-          </Popconfirm>
-        )}
         {note.status !== 'EXTRACTION_FAILED' && (
           <Button loading={reevaluate.isPending} disabled={busy} onClick={() => run(reevaluate)}>Re-evaluate</Button>
         )}
@@ -139,7 +183,7 @@ export default function ContractNoteDrawer({ view, onClose }) {
               <Alert type="warning" showIcon style={{ marginBottom: 12 }}
                 title={`Partially matched with ${note.orderLabel}`}
                 description={note.orderEditable
-                  ? <>{note.reason}. Use <b>Apply note values to order</b>, or fix the order and press Re-evaluate.</>
+                  ? <>{note.reason}. Tick what to take from the note and use <b>Overwrite selected on order</b>, or fix the order and press Re-evaluate.</>
                   : note.reason} />
             )}
             {(note.status === 'NO_MATCH' || note.status === 'EXTRACTION_FAILED') && note.reason && (
