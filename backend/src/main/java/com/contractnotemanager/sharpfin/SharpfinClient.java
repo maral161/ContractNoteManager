@@ -51,6 +51,14 @@ public class SharpfinClient {
         return session;
     }
 
+    private static String shorten(String body) {
+        if (body == null) {
+            return "";
+        }
+        String oneLine = body.replaceAll("\\s+", " ").trim();
+        return oneLine.length() > 300 ? oneLine.substring(0, 300) + "…" : oneLine;
+    }
+
     private static boolean isLocal(String url) {
         return url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1");
     }
@@ -82,8 +90,12 @@ public class SharpfinClient {
                 throw new SharpfinException("Sharpfin login interrupted", e);
             }
             if (response.statusCode() >= 300) {
-                throw new SharpfinException("Sharpfin login failed (HTTP " + response.statusCode() + ")",
-                        response.statusCode());
+                // Sharpfin's answer explains what is wrong with the request; our request (password) is never logged
+                String answer = shorten(response.body());
+                log.warn("Sharpfin login failed: HTTP {} {} {} – answer: {}", response.statusCode(), login.method(),
+                        login.path(), answer);
+                throw new SharpfinException("Sharpfin login failed (HTTP " + response.statusCode() + ")"
+                        + (answer.isEmpty() ? "" : ": " + answer), response.statusCode());
             }
             String tokenField = login.tokenField();
             if (tokenField != null && !tokenField.isBlank()) {
