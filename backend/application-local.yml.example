@@ -7,11 +7,11 @@ sharpfin:
   username: your-sharpfin-user
   password: your-sharpfin-password
   # Only change these if the Sharpfin login works differently than
-  # POST /api/sessions {"username": ..., "password": ...} returning a session cookie:
+  # POST /api/sessions {"email": ..., "password": ...} returning a session cookie:
   # login:
   #   path: /api/sessions
   #   method: POST
-  #   username-field: username
+  #   username-field: email
   #   password-field: password
   #   token-field: token           # set when the answer contains a token instead of a cookie
 

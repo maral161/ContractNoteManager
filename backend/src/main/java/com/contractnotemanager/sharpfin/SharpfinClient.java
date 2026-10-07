@@ -134,8 +134,11 @@ public class SharpfinClient {
                 response = send(pathAndQuery);
             }
             if (response.statusCode() >= 300) {
+                String answer = shorten(response.body());
+                log.warn("Sharpfin answered HTTP {} for GET {} – answer: {}", response.statusCode(), pathAndQuery, answer);
                 throw new SharpfinException("Sharpfin answered HTTP " + response.statusCode() + " for "
-                        + pathAndQuery.replaceAll("\\?.*", ""), response.statusCode());
+                        + pathAndQuery.replaceAll("\\?.*", "") + (answer.isEmpty() ? "" : ": " + answer),
+                        response.statusCode());
             }
             return parse(response.body());
         }

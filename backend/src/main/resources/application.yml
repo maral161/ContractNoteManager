@@ -38,10 +38,10 @@ sharpfin:
   login:
     path: /api/sessions
     method: POST
-    username-field: username
+    username-field: email
     password-field: password
     token-field:              # set if the login answer returns a token instead of a cookie
-  page-size: 100
+  page-size: 10             # same as the Sharpfin UI; the import fetches all pages
   timeout: 30s
 
 claude:

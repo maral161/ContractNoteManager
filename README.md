@@ -101,7 +101,7 @@ The sample contract notes are in `docs/samples/contract-notes/`; the expected re
 
 ## 5. Sharpfin login
 
-The app logs in with `POST /api/sessions` and a JSON body `{"username": …, "password": …}`, keeps the
+The app logs in with `POST /api/sessions` and a JSON body `{"email": …, "password": …}`, keeps the
 session cookie for the import, logs in again once on HTTP 401 and calls `DELETE /api/sessions` at the end.
 If the first real import fails with *"Sharpfin login failed (HTTP …)"*, adjust `sharpfin.login.*` in
 `application-local.yml` (method, field names, or `token-field` if a token comes back instead of a cookie).

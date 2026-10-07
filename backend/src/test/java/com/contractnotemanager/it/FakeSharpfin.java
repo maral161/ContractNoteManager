@@ -78,7 +78,7 @@ public class FakeSharpfin {
     public void stubAll() {
         server.resetAll();
         server.stubFor(post(urlPathEqualTo("/api/sessions"))
-                .withRequestBody(equalToJson("{\"username\":\"" + USERNAME + "\",\"password\":\"" + PASSWORD + "\"}"))
+                .withRequestBody(equalToJson("{\"email\":\"" + USERNAME + "\",\"password\":\"" + PASSWORD + "\"}"))
                 .willReturn(aResponse().withStatus(200).withHeader("Set-Cookie", "sid=abc123; Path=/")
                         .withHeader("Content-Type", "application/json").withBody("{}")));
         server.stubFor(post(urlPathEqualTo("/api/sessions")).atPriority(10)

@@ -16,13 +16,13 @@ public record SharpfinProperties(
         String username,
         String password,
         Login login,
-        @DefaultValue("100") int pageSize,
+        @DefaultValue("10") int pageSize,
         @DefaultValue("30s") Duration timeout) {
 
     public record Login(
             @DefaultValue("/api/sessions") String path,
             @DefaultValue("POST") String method,
-            @DefaultValue("username") String usernameField,
+            @DefaultValue("email") String usernameField,
             @DefaultValue("password") String passwordField,
             String tokenField) {
     }
