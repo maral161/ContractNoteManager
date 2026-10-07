@@ -31,6 +31,13 @@ fi
 
 JAR=backend/target/contractnotemanager.jar
 if [[ "${1:-}" == "--build" || ! -f "$JAR" ]]; then
+  NODE_VERSION="$(node -v 2>/dev/null || echo none)"
+  if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit((a===20&&b>=19)||(a===22&&b>=12)||a>=23?0:1)' 2>/dev/null; then
+    echo "Node.js $NODE_VERSION is too old for the UI build: Node 20.19+ or 22.12+ is needed."
+    echo "Install a current one (brew install node, or nvm install 22), then run:"
+    echo "  rm -rf frontend/node_modules && ./start.sh --build"
+    exit 1
+  fi
   echo "Building the UI and the backend…"
   (cd frontend && npm install --no-audit --no-fund && npm run build)
   (cd backend && ./mvnw -q package -DskipTests)

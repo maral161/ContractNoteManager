@@ -25,6 +25,8 @@ Claude API via the official Java SDK (`claude-opus-5-5`).
 brew install openjdk@21 node
 ```
 
+Node.js must be **20.19+ or 22.12+** (`node -v`); older versions break the UI build.
+
 PostgreSQL – either **Docker Desktop** (recommended; `start.sh` starts the app's own database on port **5433**,
 so it doesn't clash with any other PostgreSQL on your Mac) or Homebrew (port 5432, used when Docker isn't available):
 
