@@ -5,7 +5,9 @@
 1. **Import** instrument orders from the Sharpfin orders API when the user clicks a button.
 2. **Persist** them in a relational database.
 3. **Modify** the stored orders (edit, delete, revert to the imported values, with validation).
-4. **Display and edit** everything in a web UI.
+4. **Move orders through a status workflow**: new → on market → traded → confirmed → allocated.
+5. **Match orders with contract notes**. A match confirms the order automatically.
+6. **Display and edit** everything in a web UI based on the mockup.
 
 **Context and decisions so far**
 
@@ -88,7 +90,8 @@ backend/src/main/java/com/contractnotemanager/
 ├── importer/        # Import orchestration (paging, upsert) and import-run log
 ├── domain/          # JPA entities + enums
 ├── repository/      # Spring Data repositories
-├── service/         # Business logic, validation, transactions
+├── service/         # Business logic, validation, transactions, status workflow
+├── matching/        # Contract note ↔ order matching
 ├── web/             # REST controllers, request/response DTOs
 │   └── error/       # Global exception handler (problem+json)
 └── Application.java
@@ -185,21 +188,84 @@ Because imports are manual, the rule can stay simple: **local edits win**.
   browser tabs (HTTP 409 and a "reload" message).
 - **Delete** is a soft delete (`deleted_at`), so a re-import does not bring the order back.
   Deleted orders can be shown and restored with a filter.
-- Optional later: a change history per order (Hibernate Envers).
+- Optional later: a full field-level change history per order (Hibernate Envers).
+
+### 4.4.1 Order status workflow
+
+```
+            blue button       blue button     contract note match     blue button
+   NEW ──────────────▶ ON_MARKET ───────────▶ TRADED ───────────────▶ CONFIRMED ─────────────▶ ALLOCATED
+                                               ▲                         │
+                                               └──── unmatch note ───────┘
+```
+
+| From | To | How | Side effects |
+|---|---|---|---|
+| `NEW` | `ON_MARKET` | Blue button (row or bulk) | – |
+| `ON_MARKET` | `TRADED` | Blue button (row or bulk) | Sets `traded_date` = today (editable) and `settlement_date` = traded date + `asset.settlement_duration` business days |
+| `TRADED` | `CONFIRMED` | **Automatic only**, when a contract note is matched to the order (4.4.2). The blue button is disabled with a tooltip "waiting for contract note" | Links the contract note |
+| `CONFIRMED` | `TRADED` | Unmatching the contract note (⋯ menu) | Unlinks the note |
+| `CONFIRMED` | `ALLOCATED` | Blue button (row or bulk) | Final status; the blue button is hidden |
+
+- The rules live in one place in the backend (a small state machine in `OrderStatusService`).
+  The UI only asks for "next status" and shows the button label the backend allows
+  ("Send to market", "Mark traded", "Mark allocated").
+- Each request contains the status the user saw, so a double click cannot skip a step
+  (HTTP 409 if the order has already moved on).
+- **Bulk "move status forward"** moves every ticked order one step. Orders that can't move
+  (`TRADED` waiting for a note, `ALLOCATED`, deleted) are skipped. The result shows how many
+  moved and which were skipped and why.
+- Every change is written to `order_status_history` (from, to, when, triggered by
+  `USER` / `CONTRACT_NOTE` / `IMPORT`). It is shown in the order drawer.
+- **Imports and status:** Sharpfin's `status` value is mapped to these statuses on import
+  (`new` → `NEW`; other values to be mapped once seen). After the status has been changed
+  locally, imports don't overwrite it any more (it counts as a local edit, see 4.3).
+
+### 4.4.2 Contract notes and matching
+
+A contract note is the broker's or custodian's confirmation of an executed trade. Matching
+one to a `TRADED` order confirms that order.
+
+- **Input:** how contract notes arrive is still open (see open questions). The plan starts with
+  **manual entry** in the UI and adds file import (CSV/Excel/PDF) once a sample exists.
+- **Automatic matching**, run when a note is saved, and with a "Match again" button for
+  unmatched notes. A candidate order must:
+  - have status `TRADED` and not be deleted or already matched
+  - have the same ISIN, side (buy/sell) and currency
+  - have the same custody, when the note names one
+  - have the same quantity (or amount, for amount orders)
+  - have the same trade date, when the order has one
+  - have a price within a small tolerance (configurable, default 0)
+
+  Exactly one candidate → it is matched and the order becomes `CONFIRMED`. No candidate or
+  several → the note stays `UNMATCHED` and the user picks the order by hand from a short list
+  of the closest candidates.
+- **Manual match / unmatch** from both sides: from the note (pick an order) and from the order
+  (⋯ menu).
+- Differences between note and order (e.g. commission, settlement amount) are shown side by
+  side. Whether the note's values should overwrite the order's values is an open question.
 
 ### 4.5 REST API
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/orders?page=&size=&sort=&bookedFrom=&bookedTo=&asset=&portfolio=&owner=&status=&custody=&includeDeleted=` | Paged, sortable, filterable order list (server-side, matching the mockup's toolbar) |
+| GET | `/api/v1/orders?page=&size=&sort=&dateType=booked\|traded\|settled&from=&to=&asset=&portfolio=&owner=&status=&custody=&includeDeleted=` | Paged, sortable, filterable order list (server-side, matching the mockup's toolbar) |
 | GET | `/api/v1/orders/{id}` | Order detail including allocations |
 | PATCH | `/api/v1/orders/{id}` | Edit order fields (requires `version`) |
 | PUT | `/api/v1/orders/{id}/allocations` | Replace allocations (validated: sum = order value) |
 | POST | `/api/v1/orders` | Create an order manually ("Create new" button) |
 | DELETE | `/api/v1/orders/{id}` | Soft delete |
-| POST | `/api/v1/orders/bulk` (body: `ids`, `action`) | Actions on the rows ticked in the table, e.g. delete |
+| POST | `/api/v1/orders/{id}/status/advance` (body: `expectedStatus`) | Blue button: move to the next status (4.4.1) |
+| GET | `/api/v1/orders/{id}/status-history` | Status changes of an order |
+| POST | `/api/v1/orders/bulk` (body: `ids`, `action` = `DELETE` \| `ADVANCE_STATUS`) | Actions on the ticked rows; returns per-order result (done / skipped + reason) |
 | POST | `/api/v1/orders/{id}/revert` | Discard local edits and restore the last imported values |
 | GET | `/api/v1/custodies`, `/api/v1/assets`, `/api/v1/portfolios` | Reference data for filters and drop-downs |
+| GET | `/api/v1/contract-notes?status=&from=&to=&q=` | Contract note list |
+| POST | `/api/v1/contract-notes` | Enter a contract note; automatic matching runs right away |
+| PATCH / DELETE | `/api/v1/contract-notes/{id}` | Edit / delete a note (an unmatched one only) |
+| GET | `/api/v1/contract-notes/{id}/candidates` | Orders that could match this note, best first |
+| POST | `/api/v1/contract-notes/{id}/match` (body: `orderId`) | Manual match → order `CONFIRMED` |
+| POST | `/api/v1/contract-notes/{id}/unmatch` | Undo a match → order back to `TRADED` |
 | POST | `/api/v1/imports` (body: `fromDate`, `toDate`) | Run an import now |
 | GET | `/api/v1/imports` | Import history |
 
@@ -214,6 +280,8 @@ Derived from the sample response. Every table also gets `created_at` and `update
 custody 1──* orders *──1 asset
 owner   1──* orders
 orders  1──* order_allocation *──1 portfolio
+orders  1──* order_status_history
+orders  1──0..1 contract_note
 ```
 
 ```sql
@@ -264,7 +332,8 @@ CREATE TABLE orders (                                      -- "order" is a reser
     custody_id                BIGINT       NOT NULL REFERENCES custody(id),
     asset_id                  BIGINT       NOT NULL REFERENCES asset(id),
     owner_id                  BIGINT       REFERENCES owner(id),
-    status                    VARCHAR(30)  NOT NULL,       -- new | ...
+    status                    VARCHAR(20)  NOT NULL,       -- NEW | ON_MARKET | TRADED | CONFIRMED | ALLOCATED
+    sf_status                 VARCHAR(30),                 -- status as last imported from Sharpfin
     order_type                VARCHAR(20)  NOT NULL,       -- quantity | amount
     side                      VARCHAR(10)  NOT NULL,       -- buy | sell
     price                     NUMERIC(24,8),
@@ -276,6 +345,8 @@ CREATE TABLE orders (                                      -- "order" is a reser
     up_front_fee              NUMERIC(24,8) NOT NULL DEFAULT 0,
     issuer_fee                NUMERIC(24,8) NOT NULL DEFAULT 0,
     booked_date               DATE         NOT NULL,
+    traded_date               DATE,                        -- set when the order becomes TRADED
+    settlement_date           DATE,                        -- traded_date + settlement_duration business days
     valid_to                  DATE,
     source                    VARCHAR(30),                 -- rebalance | ...
     comment                   TEXT,
@@ -295,6 +366,9 @@ CREATE TABLE orders (                                      -- "order" is a reser
     deleted_at                TIMESTAMPTZ
 );
 CREATE INDEX ix_orders_booked_date ON orders(booked_date);
+CREATE INDEX ix_orders_traded_date ON orders(traded_date);
+CREATE INDEX ix_orders_settlement_date ON orders(settlement_date);
+CREATE INDEX ix_orders_status      ON orders(status);
 CREATE INDEX ix_orders_asset       ON orders(asset_id);
 
 CREATE TABLE order_allocation (
@@ -308,7 +382,40 @@ CREATE TABLE order_allocation (
     UNIQUE (order_id, portfolio_id)
 );
 
-CREATE TABLE sync_run (
+CREATE TABLE order_status_history (
+    id           BIGSERIAL PRIMARY KEY,
+    order_id     BIGINT      NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    from_status  VARCHAR(20),
+    to_status    VARCHAR(20) NOT NULL,
+    changed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    trigger      VARCHAR(20) NOT NULL,         -- USER | CONTRACT_NOTE | IMPORT
+    note         TEXT
+);
+
+CREATE TABLE contract_note (                   -- fields refined once a real sample exists
+    id                 BIGSERIAL PRIMARY KEY,
+    reference          VARCHAR(100),           -- broker's note / trade reference
+    custody_id         BIGINT REFERENCES custody(id),
+    counterpart        VARCHAR(200),           -- broker
+    isin               VARCHAR(12)   NOT NULL,
+    side               VARCHAR(10)   NOT NULL, -- buy | sell
+    quantity           NUMERIC(24,8),
+    price              NUMERIC(24,8),
+    amount             NUMERIC(24,8),          -- settlement amount
+    commission         NUMERIC(24,8) NOT NULL DEFAULT 0,
+    currency_code      CHAR(3)       NOT NULL,
+    trade_date         DATE          NOT NULL,
+    settlement_date    DATE,
+    status             VARCHAR(20)   NOT NULL, -- UNMATCHED | MATCHED
+    order_id           BIGINT UNIQUE REFERENCES orders(id),   -- one note ↔ one order (to be confirmed)
+    matched_at         TIMESTAMPTZ,
+    match_type         VARCHAR(10),            -- AUTO | MANUAL
+    source_file        VARCHAR(300),           -- when imported from a file
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_contract_note_match ON contract_note(isin, side, trade_date);
+
+CREATE TABLE import_run (
     id             BIGSERIAL PRIMARY KEY,
     started_at     TIMESTAMPTZ NOT NULL,
     finished_at    TIMESTAMPTZ,
@@ -358,10 +465,13 @@ frontend/src/
 │   ├── AppLayout.jsx        # dark left sidebar, page header, user name top right
 │   ├── OrderToolbar.jsx     # search fields, date range, filters, buttons
 │   ├── OrdersTable.jsx      # the main table
-│   ├── OrderDrawer.jsx      # create / edit order + allocations
+│   ├── OrderDrawer.jsx      # create / edit order + allocations + status history
+│   ├── StatusButton.jsx     # blue "next status" button
+│   ├── ContractNoteDrawer.jsx # enter / edit note, pick matching order
 │   └── ImportDialog.jsx     # date range → run import → result counts
 ├── pages/
 │   ├── OrdersPage.jsx       # tab "Orders"
+│   ├── ContractNotesPage.jsx # tab "Contract notes"
 │   └── ImportsPage.jsx      # tab "Imports" (import history)
 ├── App.jsx
 └── main.jsx
@@ -374,7 +484,7 @@ frontend/src/
 | Dark left sidebar with modules (Dashboard, Wealth Management, …) | Same style, but only the module this app has: **Order Management**. The other entries are left out |
 | Header "Order Management", user name/role top right, "EN" | Same. The user name is a fixed setting (one user); language is English only |
 | "STAGE" badge | Shows which Sharpfin environment the data was imported from (e.g. `demo2`) |
-| Tabs **Orders** / **Rebalance** | **Orders** / **Imports** (import history). There is no rebalancing in this app |
+| Tabs **Orders** / **Rebalance** | **Orders** / **Contract notes** / **Imports** (import history). There is no rebalancing in this app |
 
 ### 5.2 Toolbar → API filters
 
@@ -382,11 +492,10 @@ frontend/src/
 |---|---|---|
 | Asset search | Free text on asset name or ISIN | `asset` |
 | Container search | Free text on portfolio name (orders with an allocation to that portfolio) | `portfolio` |
-| Date range `2026-10-07 – 2026-10-07` | Booked date range, default today | `bookedFrom`, `bookedTo` |
-| Three icon toggles (hourglass, list, …) | **Unclear**, see open questions | – |
+| Three icon toggles next to the date range | Choose which date the range filters on: **Booked** / **Traded** / **Settled** (one active at a time, default Booked) | `dateType` |
+| Date range `2026-10-07 – 2026-10-07` | Range on the chosen date, default today | `from`, `to` |
 | Owner / Status / Custody drop-downs | Multi-select, options filled from the stored data | `owner`, `status`, `custody` |
 | Eye-slash toggle | Show deleted orders | `includeDeleted` |
-| "Fund Accounting Orders" | **Unclear**, see open questions | – |
 | **Create new** | Opens the order drawer empty | `POST /orders` |
 | *(new)* **Import from Sharpfin** | Opens the import dialog. Placed next to "Create new" | `POST /imports` |
 
@@ -398,7 +507,7 @@ frontend/src/
 | Asset | `asset.name` | ✓ |
 | ISIN | `asset.isin` | ✓ |
 | Buy / Sell | `side` | |
-| Status | `status` (+ "edited" / "conflict" badges) | ✓ |
+| Status | `status` as a coloured tag: New, On market, Traded, Confirmed, Allocated (+ "edited" / "conflict" badges) | ✓ |
 | Booked | `booked_date` (default sort) | ✓ |
 | Valid to | `valid_to` | ✓ |
 | Quantity | `value` when `order_type = quantity`; **empty** for amount orders (as with AMF Räntefond Lång in the mockup) | |
@@ -418,10 +527,26 @@ mockup. The table is server-side paged with page size 10 and a size picker, as i
 
 | Icon | Action |
 |---|---|
-| Blue (phone) | **Unclear**, see open questions |
-| Green (document) | **Unclear**, probably the contract note for the order (see open questions) |
+| Blue (phone) | **Move status forward** (4.4.1). Tooltip names the step ("Send to market", "Mark traded", "Mark allocated"); disabled for `TRADED` ("waiting for contract note"); hidden for `ALLOCATED` |
+| Green (Excel) | Left out (not needed for this app) |
 | Pencil | Opens the **order drawer**: order fields plus an allocations table (portfolio, value) with a running total that must match the order value. Save / Cancel |
-| ⋯ (more) | Revert to imported values, Delete / Restore, Show conflict details |
+| ⋯ (more) | Show/unmatch contract note, Revert to imported values, Delete / Restore, Show conflict details |
+
+**Bulk actions** for ticked rows, shown above the table when rows are ticked: **Move status
+forward** and **Delete**, both asking for confirmation and then showing the result (moved /
+skipped with reason).
+
+### 5.5 Contract notes tab
+
+Same look as the orders table. The columns are trade date, reference, ISIN/asset, side,
+quantity, price, amount, commission, currency, custody, counterpart, status
+(Unmatched / Matched) and the matched order. Actions:
+
+- **New contract note**: a form. Saving runs the automatic match at once and shows the result:
+  "matched with order …" or "no unique match".
+- **Match** on an unmatched note: a drawer listing the candidate orders, best match first,
+  with differing fields highlighted. Picking one confirms the order.
+- **Unmatch** on a matched note: the order goes back to `TRADED`.
 
 ---
 
@@ -461,10 +586,11 @@ ContractNoteManager/
 | Phase | Deliverable | Done when |
 |---|---|---|
 | **0. Scaffolding** | Repo structure, Spring Boot + React (JS) skeletons, Docker Compose with Postgres, Flyway, README | The app starts on the Mac and the UI shows data from a backend endpoint |
-| **1. Data model** | Flyway migrations and JPA entities from 4.6 | Migrations run cleanly; repository tests green (Testcontainers) |
+| **1. Data model** | Flyway migrations and JPA entities from 4.6 (incl. status history and contract notes) | Migrations run cleanly; repository tests green (Testcontainers) |
 | **2. Import** | Sharpfin client, paging, mapping, upsert, import log, `POST /imports` | An import (against WireMock and the real API) fills the DB; importing again doesn't duplicate |
-| **3. REST API** | Order list/detail/edit/allocations/delete/revert, validation, error handling | Integration tests green; usable in Swagger UI |
-| **4. UI** | Orders list, detail/edit, import dialog, import history | The full flow works in the browser: import → browse → edit → revert |
+| **3. REST API** | Order list/detail/edit/allocations/delete/revert, status workflow, bulk actions, validation, error handling | Integration tests green, incl. every allowed and forbidden status step; usable in Swagger UI |
+| **3b. Contract notes** | Contract note CRUD, automatic + manual matching, unmatch | Tests cover unique match, no match, several candidates, unmatch |
+| **4. UI** | Orders tab as in the mockup, order drawer, status button and bulk actions, contract notes tab, import dialog, import history | The full flow works in the browser: import → send to market → traded → enter contract note → auto-confirmed → allocated |
 | **5. Polish** | Single-JAR packaging, `start.sh`, backup script, optional change history | Runs with one command on the Mac |
 
 Phases 2 and 3 can be built in parallel. Phase 4 can start as soon as the API in 4.5 is fixed.
@@ -476,14 +602,18 @@ Phases 2 and 3 can be built in parallel. Phase 4 can start as soon as the API in
 1. **Sharpfin authentication:** how does a call to `demo2.sharpfin.com/api/...` authenticate?
    An API key, a bearer token, or a browser session cookie? (Needed for phase 2.)
 2. **Editable fields:** which order fields should be editable? For example price, commission,
-   fees, allocations, comment, status, or everything?
-3. **Write-back:** should edits ever be sent back to Sharpfin, or does the data end in the
-   local DB? (Not decided yet; the design keeps it possible.)
-4. **Contract notes:** given the project name and `custody.contract_notes_enabled`, should the
-   app later *produce* contract notes (e.g. one PDF per portfolio allocation)?
-5. **Mockup details** (section 5): what do these do?
-   - the three icon toggles next to the date range (hourglass, list, …)
-   - the "Fund Accounting Orders" button
-   - the blue (phone) and green (document) row buttons
-6. **Bulk actions:** which actions should be available for ticked rows? Delete only, or more
-   (for example creating contract notes)?
+   fees, allocations, comment, or everything?
+3. **Write-back:** should edits or status changes ever be sent back to Sharpfin? (Not decided
+   yet; the design keeps it possible.)
+4. **Where do contract notes come from?** Entered by hand, files from the broker/custodian
+   (PDF, CSV, Excel, e-mail), or an API? A sample would define the fields and the file import.
+5. **Matching rules:** are the criteria in 4.4.2 right (ISIN, side, currency, custody,
+   quantity/amount, trade date, price tolerance)? Should a price difference be allowed?
+6. **One-to-one?** Can one contract note cover several orders, or one order be confirmed by
+   several notes (e.g. partial fills)? The plan assumes one note ↔ one order.
+7. **After a match:** should the note's price, commission and settlement amount overwrite the
+   order's values, or only be shown next to them?
+8. **Moving a status back:** apart from unmatching a note, should it be possible to step a status
+   back by mistake (e.g. On market → New)?
+9. **Other Sharpfin statuses:** besides `new`, which status values can the API return, and how
+   do they map to the five statuses?
