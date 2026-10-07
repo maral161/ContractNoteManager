@@ -137,7 +137,7 @@ public final class ContractNoteMatcher {
         BigDecimal expected = sell ? gross.subtract(commission) : gross.add(commission);
         checks.add(new Check("Note adds up (price × quantity " + (sell ? "−" : "+") + " commission)",
                 within(expected, n.settlementAmount()),
-                plain(expected.setScale(2, RoundingMode.HALF_UP)), plain(n.settlementAmount())));
+                plain(n.settlementAmount()), "calc. " + plain(expected.setScale(2, RoundingMode.HALF_UP))));
         return checks;
     }
 

@@ -8,7 +8,8 @@ import { useRefreshingMutation } from '../api/hooks';
 
 const OUTCOME_ICON = {
   MATCHED: <CheckCircleFilled style={{ color: '#22c55e' }} />,
-  UNMATCHED: <CloseCircleFilled style={{ color: '#ef4444' }} />,
+  PARTIALLY_MATCHED: <ExclamationCircleFilled style={{ color: '#f59e0b' }} />,
+  NO_MATCH: <CloseCircleFilled style={{ color: '#ef4444' }} />,
   EXTRACTION_FAILED: <CloseCircleFilled style={{ color: '#ef4444' }} />,
   DUPLICATE: <ExclamationCircleFilled style={{ color: '#f59e0b' }} />,
   INVALID_FILE: <ExclamationCircleFilled style={{ color: '#f59e0b' }} />,

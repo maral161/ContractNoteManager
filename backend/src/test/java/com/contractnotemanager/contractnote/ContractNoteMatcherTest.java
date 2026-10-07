@@ -39,7 +39,7 @@ class ContractNoteMatcherTest {
         var result = match(SampleNotes.UBS_APPLE, traded);
         assertThat(result.status()).isEqualTo(ContractNoteStatus.NO_MATCH);
         assertThat(result.score()).isEqualTo(3); // currency, quantity, price
-        assertThat(result.reason()).contains("only 3 of 6").contains("note adds up differs (102934.45 vs 12934)");
+        assertThat(result.reason()).contains("only 3 of 6").contains("note adds up differs (12934 vs calc. 102934.45)");
     }
 
     @Test

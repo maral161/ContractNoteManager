@@ -27,3 +27,10 @@ export const STATUS_COLORS = {
   CONFIRMED: 'green',
   ALLOCATED: 'purple',
 };
+
+export const NOTE_STATUS = {
+  MATCHED: { label: 'Matched', color: 'green', lamp: 'on' },
+  PARTIALLY_MATCHED: { label: 'Partially matched', color: 'orange', lamp: 'partial' },
+  NO_MATCH: { label: 'No match', color: 'red' },
+  EXTRACTION_FAILED: { label: 'Not readable', color: 'default' },
+};

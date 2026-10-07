@@ -81,6 +81,9 @@ body { background: var(--page-bg); color: var(--text); }
   background: #d9d9d9; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); vertical-align: middle;
 }
 .lamp.on { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.18); cursor: pointer; }
+.lamp.partial { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.2); cursor: pointer; }
+.check-ok { color: #16a34a; font-weight: 600; }
+.check-fail { color: #dc2626; font-weight: 600; }
 .pagination-row { display: flex; justify-content: center; margin-top: 20px; }
 
 /* ---- bulk-action area ---- */

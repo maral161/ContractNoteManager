@@ -46,8 +46,11 @@ export function useOrderNote(id, enabled) {
   });
 }
 
-export const useUnmatchedNotes = () => useQuery({ queryKey: keys.notes, queryFn: () => api.get('/api/v1/contract-notes') });
-export const useUnmatchedCount = () =>
+export const useContractNotes = (status) => useQuery({
+  queryKey: [...keys.notes, status ?? 'ALL'],
+  queryFn: () => api.get(`/api/v1/contract-notes${status ? `?status=${status}` : ''}`),
+});
+export const useNoteCounts = () =>
   useQuery({ queryKey: keys.noteCount, queryFn: () => api.get('/api/v1/contract-notes/count') });
 export const useImports = () => useQuery({ queryKey: keys.imports, queryFn: () => api.get('/api/v1/imports') });
 

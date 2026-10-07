@@ -7,8 +7,9 @@ A local web app that
 3. moves them through the status workflow **New → On market → Traded → Confirmed → Allocated**
    (blue button, one order or several at once),
 4. **reads contract-note PDFs with Claude** (dropped on the ticked orders) and **matches** them:
-   a match confirms the order and turns its *Contract Note Match* lamp green; everything else lands
-   in *Unmatched Contract Notes* with the reason,
+   *Matched* confirms the order (green lamp), *Partially matched* links the note to the order (orange lamp)
+   and can update the order with the note's values, *No match* explains why; all notes are listed in the
+   *Contract Notes* tab and are re-evaluated when orders change,
 5. lets you **edit** price, commission, counterpart (broker), owner and the per-portfolio quantities
    in the order window.
 
@@ -67,13 +68,26 @@ The tables are created automatically on the first start.
 | Send to market / mark traded / mark allocated | blue button in the row, or tick rows → *Move status forward* |
 | Edit price, commission, counterpart, owner, quantities | pencil → order window → *Save* / *Save and close* (until the order is Confirmed) |
 | Confirm with contract notes | tick the Traded orders → drop the PDFs in the area above the table |
-| Check a match | click the green lamp → PDF next to the order's values |
-| Fix a note that did not match | *Unmatched Contract Notes* → open it → correct values → *Save and match again* |
+| Check a match | click the green or orange lamp → PDF, the six checks and the values compared |
+| Partially matched note | open it → *Apply note values to order* (price, quantity, commission, broker) → it becomes Matched |
+| Note that did not match | *Contract Notes* → open it → fix the order or correct a misread value → *Re-evaluate* |
+| Notes uploaded before the order was ready | re-evaluated automatically after order edits, status changes and imports; or *Re-evaluate all* |
 | Undo a mistake | ⋯ → *Delete*; the next import brings the order back as a new order |
 
-**Matching rules:** same ISIN, currency and quantity (amount orders: amount), exactly the same price,
-settlement amount within ±1 of the currency (signs ignored), the order must be *Traded*, and exactly one
-ticked order may fit. Name and broker are not compared. The note never overwrites order values.
+**Matching rules:** ISIN and Buy/Sell must agree exactly (a note without Buy/Sell is *No match*); the order
+must be *Traded*. Then six checks:
+
+| # | Check | Rule |
+|---|---|---|
+| 1 | Currency | equal |
+| 2 | Quantity | equal (amount orders: quantity × price vs. the order amount, ±1) |
+| 3 | Price | exactly equal |
+| 4 | Commission | note = order |
+| 5 | Settlement amount | ±1, with the note's commission taken out first (Sharpfin's amount excludes commission) |
+| 6 | Note adds up | price × quantity + commission (buy) / − commission (sell) = settlement amount, ±1 |
+
+6 of 6 → **Matched** (order confirmed) · 4–5 → **Partially matched** · 3 or fewer → **No match**.
+If two orders fit equally well, nothing is linked – tick only the right one and upload again.
 
 **Re-imports:** unchanged orders are skipped; changed orders are updated unless you edited them or they are
 already confirmed – then your values stay and the order is marked *conflict* (⋯ → *Revert* takes Sharpfin's values).

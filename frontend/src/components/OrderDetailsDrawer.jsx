@@ -16,9 +16,9 @@ export default function OrderDetailsDrawer({ orderId, onClose, onShowNote }) {
         <>
           <Descriptions size="small" bordered column={2} items={[
             { label: 'Status', children: <Tag color={STATUS_COLORS[o.status]}>{o.statusLabel}</Tag> },
-            { label: 'Contract note', children: o.noteMatched
-              ? <Button size="small" type="link" style={{ padding: 0 }} onClick={() => onShowNote(o.id)}>matched – show</Button>
-              : 'not matched' },
+            { label: 'Contract note', children: o.noteStatus
+              ? <Button size="small" type="link" style={{ padding: 0 }} onClick={() => onShowNote(o.id)}>{o.noteStatus === 'MATCHED' ? 'matched' : 'partially matched'} – show</Button>
+              : 'none linked' },
             { label: 'ISIN', children: o.isin },
             { label: 'Type', children: `${capitalize(o.assetType)}, ${o.orderType} order` },
             { label: 'Quantity / amount', children: formatNumber(o.value, 2, Math.max(2, o.qtyDecimals ?? 0)) },

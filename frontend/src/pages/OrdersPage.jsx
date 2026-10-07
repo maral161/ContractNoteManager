@@ -9,7 +9,7 @@ import {
 import dayjs from 'dayjs';
 import { api } from '../api/client';
 import { useCustodies, useOrders, useOwners, useRefreshingMutation } from '../api/hooks';
-import { capitalize, formatAmount, formatQuantity, STATUS_COLORS } from '../lib/format';
+import { capitalize, formatAmount, formatQuantity, NOTE_STATUS, STATUS_COLORS } from '../lib/format';
 import BulkActionBar from '../components/BulkActionBar';
 import EditOrderModal from '../components/EditOrderModal';
 import ImportDialog from '../components/ImportDialog';
@@ -105,7 +105,7 @@ export default function OrdersPage() {
   const moreMenu = (order) => ({
     items: [
       { key: 'details', label: 'Details, allocations and history' },
-      { key: 'note', label: 'Show contract note', disabled: !order.noteMatched },
+      { key: 'note', label: 'Show contract note', disabled: !order.noteStatus },
       { key: 'revert', label: 'Revert to imported values', disabled: !order.editable || !order.locallyModified },
       { type: 'divider' },
       { key: 'delete', label: 'Delete', danger: true },
@@ -125,7 +125,7 @@ export default function OrdersPage() {
         modal.confirm({
           title: `Delete ${capitalize(order.side)} ${order.assetName}?`,
           content: 'To start over: the next import brings the order back as a new order. '
-            + 'A matched contract note goes back to the unmatched list.',
+            + 'A linked contract note becomes "No match" and is evaluated again.',
           okButtonProps: { danger: true },
           okText: 'Delete',
           onOk: () => remove.mutateAsync(order).then(() => {
@@ -174,12 +174,16 @@ export default function OrdersPage() {
     { key: 'counterpart', title: 'Counterpart', dataIndex: 'counterpart', ellipsis: true, width: 100 },
     { key: 'custody', title: 'Custody', dataIndex: 'custodyName', width: 80 },
     {
-      key: 'noteMatched', title: <span className="wrap-title">Contract Note Match</span>, dataIndex: 'noteMatched', sorter: true, width: 92, align: 'center', fixed: 'right',
-      render: (matched, o) => (
-        <Tooltip title={matched ? 'Contract note matched – click to view' : 'No contract note matched yet'}>
-          <span className={`lamp${matched ? ' on' : ''}`} onClick={() => matched && setNoteView({ orderId: o.id })} />
-        </Tooltip>
-      ),
+      key: 'noteMatched', title: <span className="wrap-title">Contract Note Match</span>, dataIndex: 'noteStatus', sorter: true, width: 92, align: 'center', fixed: 'right',
+      render: (noteStatus, o) => {
+        const info = NOTE_STATUS[noteStatus];
+        const title = info ? `${info.label} – click to view the contract note` : 'No contract note linked yet';
+        return (
+          <Tooltip title={title}>
+            <span className={`lamp${info?.lamp ? ` ${info.lamp}` : ''}`} onClick={() => info && setNoteView({ orderId: o.id })} />
+          </Tooltip>
+        );
+      },
     },
   ];
 
@@ -257,10 +261,11 @@ export default function OrdersPage() {
           value={status} onChange={setStatus} options={STATUS_OPTIONS} />
         <Select mode="multiple" allowClear placeholder="Custody" style={{ minWidth: 120 }} maxTagCount="responsive"
           value={custody} onChange={setCustody} options={(custodies ?? []).map((c) => ({ value: c.id, label: c.name }))} />
-        <Select style={{ width: 160 }} value={noteMatch} onChange={setNoteMatch} options={[
+        <Select style={{ width: 190 }} value={noteMatch} onChange={setNoteMatch} options={[
           { value: 'ALL', label: 'All contract notes' },
           { value: 'MATCHED', label: 'Note matched' },
-          { value: 'UNMATCHED', label: 'Note not matched' },
+          { value: 'PARTIAL', label: 'Note partially matched' },
+          { value: 'NONE', label: 'No note linked' },
         ]} />
         <span className="spacer" />
         <Button type="primary" icon={<CloudDownloadOutlined />} onClick={() => setImportOpen(true)}>

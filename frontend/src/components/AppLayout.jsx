@@ -1,24 +1,26 @@
-import { Alert, Badge, Tabs } from 'antd';
+import { Alert, Badge, Tabs, Tooltip } from 'antd';
 import { SwapOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useAppInfo, useUnmatchedCount } from '../api/hooks';
+import { useAppInfo, useNoteCounts } from '../api/hooks';
 
 /** Layout of the mockup: dark sidebar, page header with environment badge and user, tabs. */
 export default function AppLayout({ children }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { data: info } = useAppInfo();
-  const { data: count } = useUnmatchedCount();
-  const unmatched = count?.unmatched ?? 0;
+  const { data: counts } = useNoteCounts();
+  const open = counts?.open ?? 0;
 
   const tabs = [
     { key: '/orders', label: 'Orders' },
     {
-      key: '/unmatched-notes',
+      key: '/contract-notes',
       label: (
         <span>
-          Unmatched Contract Notes{' '}
-          <Badge count={unmatched} size="small" style={{ marginLeft: 4 }} overflowCount={99} />
+          Contract Notes{' '}
+          <Tooltip title="Notes not matched yet (partially matched, no match, not readable)">
+            <Badge count={open} size="small" style={{ marginLeft: 4 }} overflowCount={99} />
+          </Tooltip>
         </span>
       ),
     },

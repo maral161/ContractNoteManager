@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
 import { Alert, App, Button, Drawer, Form, Input, Popconfirm, Select, Skeleton, Space, Table, Tag } from 'antd';
+import { CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { useOrder, useOrderNote, useRefreshingMutation } from '../api/hooks';
-import { formatAmount, formatDateTime, formatNumber } from '../lib/format';
+import { useOrderNote, useRefreshingMutation } from '../api/hooks';
+import { formatDateTime, NOTE_STATUS } from '../lib/format';
 
 const FIELDS = [
   { name: 'instrumentName', label: 'Name' },
@@ -16,31 +17,23 @@ const FIELDS = [
   { name: 'commission', label: 'Commission' },
 ];
 
-const numEq = (a, b, tolerance = 0) => a != null && b != null && Math.abs(Math.abs(Number(a)) - Math.abs(Number(b))) <= tolerance;
-
-/** Note next to the order: which values agree (matching rules) – nothing on the order is overwritten. */
-function Comparison({ note, order }) {
-  const rows = [
-    { key: 'name', label: 'Name', note: note.instrumentName, order: order.assetName, same: true },
-    { key: 'isin', label: 'ISIN', note: note.isin, order: order.isin, same: note.isin === order.isin },
-    { key: 'ccy', label: 'Currency', note: note.currency, order: order.currency, same: note.currency === order.currency },
-    { key: 'qty', label: 'Quantity', note: formatNumber(note.quantity), order: formatNumber(order.value), same: numEq(note.quantity, order.value) || order.orderType === 'amount' },
-    { key: 'price', label: 'Price', note: formatNumber(note.price, 2, 6), order: formatNumber(order.price, 2, 6), same: numEq(note.price, order.price) },
-    { key: 'amount', label: 'Settlement amount', note: formatAmount(note.settlementAmount), order: formatAmount(order.amount), same: numEq(note.settlementAmount, order.amount, 1) },
-    { key: 'broker', label: 'Broker', note: note.broker, order: order.counterpart, same: true },
-    { key: 'commission', label: 'Commission', note: formatAmount(note.commission), order: formatAmount(order.commission), same: true },
-  ];
+/** The six checks with the values compared. */
+function Checks({ note }) {
+  if (!note.checks?.length) return null;
   return (
-    <Table className="compare-table" size="small" bordered pagination={false} rowKey="key" dataSource={rows}
+    <Table className="compare-table" size="small" bordered pagination={false} rowKey="name" dataSource={note.checks}
+      style={{ marginBottom: 12 }}
+      title={() => <b>Checks: {note.matchScore} of {note.checkCount} pass{note.orderLabel ? ` – ${note.orderLabel}` : ''}</b>}
       columns={[
-        { title: '', dataIndex: 'label', width: 140 },
-        { title: 'Contract note', dataIndex: 'note', onCell: (r) => ({ className: r.same ? '' : 'diff' }) },
-        { title: 'Order', dataIndex: 'order' },
+        { title: '', dataIndex: 'ok', width: 32, render: (ok) => (ok ? <CheckOutlined className="check-ok" /> : <CloseOutlined className="check-fail" />) },
+        { title: 'Check', dataIndex: 'name' },
+        { title: 'Contract note', dataIndex: 'noteValue', align: 'right' },
+        { title: 'Order', dataIndex: 'orderValue', align: 'right' },
       ]} />
   );
 }
 
-function NoteForm({ note, onDone }) {
+function NoteActions({ note, onDone }) {
   const { message } = App.useApp();
   const [form] = Form.useForm();
   useEffect(() => {
@@ -49,54 +42,70 @@ function NoteForm({ note, onDone }) {
   }, [note, form]);
 
   const save = useRefreshingMutation((values) => api.patch(`/api/v1/contract-notes/${note.id}`, values));
-  const rematch = useRefreshingMutation(() => api.post(`/api/v1/contract-notes/${note.id}/rematch`));
+  const reevaluate = useRefreshingMutation(() => api.post(`/api/v1/contract-notes/${note.id}/reevaluate`));
+  const reread = useRefreshingMutation(() => api.post(`/api/v1/contract-notes/${note.id}/reread`));
+  const apply = useRefreshingMutation(() => api.post(`/api/v1/contract-notes/${note.id}/apply-to-order`));
   const remove = useRefreshingMutation(() => api.delete(`/api/v1/contract-notes/${note.id}`));
 
-  const doRematch = async () => {
-    const result = await rematch.mutateAsync();
-    if (result.outcome === 'MATCHED') {
-      message.success(result.message);
-      onDone();
-    } else {
-      message.warning(result.message, 6);
-    }
+  const report = (result) => {
+    if (result.outcome === 'MATCHED') message.success(result.message, 5);
+    else if (result.outcome === 'PARTIALLY_MATCHED') message.warning(result.message, 6);
+    else message.error(result.message, 6);
   };
+  const run = (mutation) => mutation.mutateAsync().then(report).catch((e) => message.error(e.message));
 
-  const saveAndMatch = async () => {
+  const saveValues = async () => {
     try {
       const values = await form.validateFields();
-      await save.mutateAsync(Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v === '' ? null : String(v)])));
-      await doRematch();
+      report(await save.mutateAsync(Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v === '' ? null : String(v)]))));
     } catch (e) {
       if (e?.message) message.error(e.message);
     }
   };
 
+  const differing = (note.checks ?? []).filter((c) => !c.ok).map((c) => c.name.replace(/ \(.*\)/, ''));
+  const busy = save.isPending || reevaluate.isPending || reread.isPending || apply.isPending;
+
   return (
-    <Form form={form} layout="vertical" size="small">
-      {FIELDS.map((f) => (
-        <Form.Item key={f.name} name={f.name} label={f.label} style={{ marginBottom: 8 }}>
-          <Input />
-        </Form.Item>
-      ))}
-      <Form.Item name="side" label="Side (if stated)" style={{ marginBottom: 12 }}>
-        <Select options={[{ value: '', label: 'Not stated' }, { value: 'buy', label: 'Buy' }, { value: 'sell', label: 'Sell' }]} />
-      </Form.Item>
-      <Space wrap>
-        <Button type="primary" loading={save.isPending || rematch.isPending} onClick={saveAndMatch}>Save and match again</Button>
-        <Button loading={rematch.isPending} onClick={() => doRematch().catch((e) => message.error(e.message))}>Match again</Button>
+    <>
+      <Space wrap style={{ marginBottom: 16 }}>
+        {note.status === 'PARTIALLY_MATCHED' && (
+          <Popconfirm
+            title="Update the order with the note's values?"
+            description={<div style={{ maxWidth: 320 }}>Price, quantity, commission and broker of <b>{note.orderLabel}</b> are set from the contract note (now different: {differing.join(', ') || '–'}). The note is then checked again.</div>}
+            okText="Update order" onConfirm={() => run(apply)} disabled={!note.orderEditable}>
+            <Button type="primary" loading={apply.isPending} disabled={!note.orderEditable || busy}>Apply note values to order</Button>
+          </Popconfirm>
+        )}
+        {note.status !== 'EXTRACTION_FAILED' && (
+          <Button loading={reevaluate.isPending} disabled={busy} onClick={() => run(reevaluate)}>Re-evaluate</Button>
+        )}
+        <Button loading={reread.isPending} disabled={busy} onClick={() => run(reread)}>Read PDF again</Button>
         <Popconfirm title="Delete this contract note?" okButtonProps={{ danger: true }} okText="Delete"
           onConfirm={() => remove.mutateAsync().then(onDone).catch((e) => message.error(e.message))}>
-          <Button danger>Delete</Button>
+          <Button danger disabled={busy}>Delete</Button>
         </Popconfirm>
       </Space>
-    </Form>
+
+      <h4 style={{ margin: '4px 0 8px' }}>Values read from the PDF</h4>
+      <Form form={form} layout="vertical" size="small">
+        {FIELDS.map((f) => (
+          <Form.Item key={f.name} name={f.name} label={f.label} style={{ marginBottom: 8 }}>
+            <Input />
+          </Form.Item>
+        ))}
+        <Form.Item name="side" label="Buy / Sell" style={{ marginBottom: 12 }}>
+          <Select options={[{ value: '', label: 'Not stated' }, { value: 'buy', label: 'Buy' }, { value: 'sell', label: 'Sell' }]} />
+        </Form.Item>
+        <Button loading={save.isPending} disabled={busy} onClick={saveValues}>Save corrections and re-evaluate</Button>
+      </Form>
+    </>
   );
 }
 
 /**
- * Shows a contract note: the PDF on the left, the values Claude read on the right.
- * view = { orderId } for a matched note (opened from the green lamp) or { noteId } (from the unmatched list).
+ * A contract note: the PDF on the left; status, the six checks and the actions on the right.
+ * view = { orderId } (opened from the lamp in the orders table) or { noteId } (from the Contract Notes tab).
  */
 export default function ContractNoteDrawer({ view, onClose }) {
   const orderId = view?.orderId ?? null;
@@ -107,34 +116,42 @@ export default function ContractNoteDrawer({ view, onClose }) {
     enabled: view?.noteId != null,
   });
   const note = orderId ? byOrder.data : byId.data;
-  const { data: order } = useOrder(note?.orderId ?? null);
-  const open = view != null;
-  const editable = note && note.status !== 'MATCHED';
+  const status = note && NOTE_STATUS[note.status];
 
   return (
-    <Drawer open={open} onClose={onClose} size={1200} destroyOnHidden
+    <Drawer open={view != null} onClose={onClose} size={1250} destroyOnHidden
       title={note ? (
         <span>
-          Contract note <span className="muted">{note.fileName}</span>{' '}
-          <Tag color={note.status === 'MATCHED' ? 'green' : 'red'}>{note.status === 'MATCHED' ? 'Matched' : 'Not matched'}</Tag>
+          Contract note <span className="muted">{note.fileName}</span> <Tag color={status.color}>{status.label}</Tag>
         </span>
       ) : 'Contract note'}>
       {!note ? <Skeleton active /> : (
         <div className="note-layout">
-          <iframe className="pdf-frame" title="Contract note PDF" src={`/api/v1/contract-notes/${note.id}/file/${encodeURIComponent(note.fileName)}`} />
+          <iframe className="pdf-frame" title="Contract note PDF"
+            src={`/api/v1/contract-notes/${note.id}/file/${encodeURIComponent(note.fileName)}`} />
           <div>
-            {note.reason && <Alert type="error" showIcon title="Why it did not match" description={note.reason} style={{ marginBottom: 12 }} />}
+            {note.status === 'MATCHED' && (
+              <Alert type="success" showIcon style={{ marginBottom: 12 }}
+                title={`Matched with ${note.orderLabel} on ${formatDateTime(note.matchedAt)}`}
+                description="All six checks pass; the order is confirmed." />
+            )}
+            {note.status === 'PARTIALLY_MATCHED' && (
+              <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+                title={`Partially matched with ${note.orderLabel}`}
+                description={note.orderEditable
+                  ? <>{note.reason}. Use <b>Apply note values to order</b>, or fix the order and press Re-evaluate.</>
+                  : note.reason} />
+            )}
+            {(note.status === 'NO_MATCH' || note.status === 'EXTRACTION_FAILED') && note.reason && (
+              <Alert type="error" showIcon style={{ marginBottom: 12 }}
+                title={note.status === 'NO_MATCH' ? 'No match' : 'Not readable'} description={note.reason} />
+            )}
             {note.warnings?.length > 0 && (
               <Alert type="warning" showIcon title="Check" style={{ marginBottom: 12 }}
                 description={<ul style={{ margin: 0, paddingLeft: 18 }}>{note.warnings.map((w) => <li key={w}>{w}</li>)}</ul>} />
             )}
-            {note.status === 'MATCHED' && order && (
-              <>
-                <p>Matched with <b>{note.orderLabel}</b> on {formatDateTime(note.matchedAt)}. The order's values are not changed by the note.</p>
-                <Comparison note={note} order={order} />
-              </>
-            )}
-            {editable && <NoteForm note={note} onDone={onClose} />}
+            <Checks note={note} />
+            {note.status !== 'MATCHED' && <NoteActions note={note} onDone={onClose} />}
             <p className="muted" style={{ marginTop: 12, fontSize: 11 }}>
               {note.extractionModel ? `Read by ${note.extractionModel}` : 'Not read automatically'} · uploaded {formatDateTime(note.createdAt)}
             </p>
