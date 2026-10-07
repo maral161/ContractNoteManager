@@ -22,13 +22,13 @@ public interface OrderRepository extends JpaRepository<Order, Long>, JpaSpecific
     @EntityGraph(attributePaths = {"asset", "custody", "owner", "broker"})
     Page<Order> findAll(Specification<Order> spec, Pageable pageable);
 
-    /** Orders with the given ISIN or status; used to explain why a contract note didn't match. */
+    /** Orders with the note's ISIN that no other contract note is linked to (any status, for the explanation). */
     @Query("""
             select o from Order o join fetch o.asset
-            where (o.status = :status or o.asset.isin = :isin)
-              and not exists (select 1 from ContractNote n where n.order = o)
+            where o.asset.isin = :isin
+              and not exists (select 1 from ContractNote n where n.order = o and n.id <> :noteId)
             """)
-    List<Order> findMatchCandidates(OrderStatus status, String isin);
+    List<Order> findMatchCandidates(String isin, Long noteId);
 
     @Query("select o from Order o join fetch o.asset where o.id in :ids")
     List<Order> findAllWithAssetByIdIn(Collection<Long> ids);

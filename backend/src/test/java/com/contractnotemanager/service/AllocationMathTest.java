@@ -53,4 +53,13 @@ class AllocationMathTest {
         assertThat(BusinessDays.add(LocalDate.of(2026, 10, 7), 2)).isEqualTo(LocalDate.of(2026, 10, 9));
         assertThat(BusinessDays.add(LocalDate.of(2026, 10, 8), 2)).isEqualTo(LocalDate.of(2026, 10, 12));
     }
+
+    @Test
+    void scalesAllocationsToTheNotesQuantity() {
+        // order 1,761 + 103 = 1,864; the note says 1,800 → proportional, whole units, total exact
+        List<BigDecimal> scaled = AllocationMath.scaleQuantities(
+                List.of(new BigDecimal("1761"), new BigDecimal("103")), new BigDecimal("1800"), 0);
+        assertThat(scaled).containsExactly(new BigDecimal("1701"), new BigDecimal("99"));
+        assertThat(scaled.stream().reduce(BigDecimal.ZERO, BigDecimal::add)).isEqualByComparingTo("1800");
+    }
 }

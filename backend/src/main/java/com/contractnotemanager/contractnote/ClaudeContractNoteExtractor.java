@@ -37,7 +37,8 @@ public class ClaudeContractNoteExtractor implements ContractNoteExtractor {
             or German (Auftragsbestätigung: Wertpapier, Anzahl, Kurs, Abrechnungsbetrag, Courtage,
             Geschäftsvermittler, Gegenpartei).
 
-            Extract the trade data exactly as printed. The broker is the executing broker or bank, never the
+            Buy/Sell is often stated as "Order side", "Köporder"/"Säljorder", "Köp"/"Sälj", "Kauf"/"Verkauf" or
+            "Art des Geschäfts". Extract the trade data exactly as printed. The broker is the executing broker or bank, never the
             counterparty or client that the note is addressed to. Return numbers as plain decimals: remove
             thousands separators (spaces, apostrophes, commas used as thousands separators), use '.' as the decimal
             mark and drop any sign. Do not calculate or correct values; if a value is missing or illegible, return

@@ -17,8 +17,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.contractnotemanager.contractnote.ContractNoteService;
 import com.contractnotemanager.domain.Broker;
-import com.contractnotemanager.domain.ContractNoteStatus;
 import com.contractnotemanager.domain.Order;
 import com.contractnotemanager.domain.OrderAllocation;
 import com.contractnotemanager.domain.OrderStatus;
@@ -27,7 +27,6 @@ import com.contractnotemanager.domain.Portfolio;
 import com.contractnotemanager.domain.StatusTrigger;
 import com.contractnotemanager.importer.OrderPayloadMapper;
 import com.contractnotemanager.repository.BrokerRepository;
-import com.contractnotemanager.repository.ContractNoteRepository;
 import com.contractnotemanager.repository.OrderRepository;
 import com.contractnotemanager.repository.OrderStatusHistoryRepository;
 import com.contractnotemanager.repository.OwnerRepository;
@@ -47,20 +46,21 @@ public class OrderService {
 
     private final OrderRepository orders;
     private final OrderStatusHistoryRepository history;
-    private final ContractNoteRepository notes;
     private final BrokerRepository brokers;
     private final OwnerRepository owners;
     private final PortfolioRepository portfolios;
     private final OrderPayloadMapper payloadMapper;
     private final ObjectMapper json;
     private final TransactionTemplate tx;
+    private final ContractNoteService noteService;
 
-    public OrderService(OrderRepository orders, OrderStatusHistoryRepository history, ContractNoteRepository notes,
+    public OrderService(OrderRepository orders, OrderStatusHistoryRepository history,
             BrokerRepository brokers, OwnerRepository owners, PortfolioRepository portfolios,
-            OrderPayloadMapper payloadMapper, ObjectMapper json, PlatformTransactionManager txManager) {
+            OrderPayloadMapper payloadMapper, ObjectMapper json, PlatformTransactionManager txManager,
+            ContractNoteService noteService) {
+        this.noteService = noteService;
         this.orders = orders;
         this.history = history;
-        this.notes = notes;
         this.brokers = brokers;
         this.owners = owners;
         this.portfolios = portfolios;
@@ -140,6 +140,7 @@ public class OrderService {
         o.setSettlementAmount(AllocationMath.settlementAmount(o.isAmountOrder(), o.isSell(), o.getPrice(), o.getValue()));
         o.setLocallyModified(true);
         orders.saveAndFlush(o);
+        noteService.reevaluateOpen(); // a changed order may now fit an uploaded contract note
         return OrderMapper.toDto(o, true);
     }
 
@@ -188,6 +189,10 @@ public class OrderService {
     public OrderDto advanceStatus(Long id, OrderStatus expected) {
         Order o = find(id);
         advance(o, expected);
+        if (o.getStatus() == OrderStatus.TRADED) {
+            orders.flush();
+            noteService.reevaluateOpen(); // a newly traded order may fit an uploaded contract note
+        }
         return OrderMapper.toDto(o, false);
     }
 
@@ -214,14 +219,10 @@ public class OrderService {
     @Transactional
     public void delete(Long id) {
         Order o = find(id);
-        notes.findByOrderId(id).ifPresent(note -> {
-            note.setOrder(null);
-            note.setMatchedAt(null);
-            note.setStatus(ContractNoteStatus.UNMATCHED);
-            note.setUnmatchedReason("The matched order (" + OrderMapper.label(o) + ") was deleted");
-            notes.saveAndFlush(note);
-        });
+        noteService.unlinkOrder(id, OrderMapper.label(o));
         orders.delete(o);
+        orders.flush();
+        noteService.reevaluateOpen();
     }
 
     /** Discards local edits and restores the last imported Sharpfin values. */
@@ -242,6 +243,7 @@ public class OrderService {
         o.setLocallyModified(false);
         o.setSyncConflict(false);
         orders.saveAndFlush(o);
+        noteService.reevaluateOpen();
         return OrderMapper.toDto(o, true);
     }
 
@@ -263,6 +265,9 @@ public class OrderService {
             } catch (ApiException e) {
                 items.add(new BulkResult.Item(id, label, false, e.getMessage()));
             }
+        }
+        if (items.stream().anyMatch(BulkResult.Item::done)) {
+            noteService.reevaluateOpen();
         }
         int done = (int) items.stream().filter(BulkResult.Item::done).count();
         return new BulkResult(done, items.size() - done, items);

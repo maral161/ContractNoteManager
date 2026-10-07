@@ -16,7 +16,6 @@ class NoteFieldsTest {
         assertThat(f.settlementAmount()).isEqualByComparingTo("811809.00");
         assertThat(f.currency()).isEqualTo("SEK");
         assertThat(f.errors()).isEmpty();
-        assertThat(f.warnings()).isEmpty(); // 1864 × 435.52 = 811,809.28 ≈ 811,809.00
     }
 
     @Test
@@ -38,10 +37,10 @@ class NoteFieldsTest {
     }
 
     @Test
-    void warnsWhenQuantityTimesPriceDoesNotFitTheAmount() {
-        NoteFields f = NoteFields.parse("ABB", "CH0012221716", "SEK", "1864", "435.52", "700000", "ABN Amro", "0",
-                null, null, List.of("two trades on one note"));
+    void keepsExtractionWarnings() {
+        NoteFields f = NoteFields.parse("ABB", "CH0012221716", "SEK", "1864", "435.52", "810609", "ABN Amro", "1200",
+                "sell", null, List.of("two trades on one note"));
         assertThat(f.errors()).isEmpty();
-        assertThat(f.warnings()).hasSize(2).contains("two trades on one note");
+        assertThat(f.warnings()).containsExactly("two trades on one note");
     }
 }

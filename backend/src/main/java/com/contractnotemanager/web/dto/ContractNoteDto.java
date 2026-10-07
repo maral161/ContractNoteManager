@@ -23,8 +23,12 @@ public record ContractNoteDto(
         String side,
         LocalDate tradeDate,
         List<String> warnings,
+        Integer matchScore,
+        int checkCount,
+        List<com.contractnotemanager.contractnote.ContractNoteMatcher.Check> checks,
         Long orderId,
         String orderLabel,
+        Boolean orderEditable,
         Instant matchedAt,
         Instant createdAt,
         String extractionModel) {

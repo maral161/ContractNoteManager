@@ -22,6 +22,6 @@ public record OrderFilter(
     }
 
     public enum NoteMatch {
-        ALL, MATCHED, UNMATCHED
+        ALL, MATCHED, PARTIAL, NONE
     }
 }

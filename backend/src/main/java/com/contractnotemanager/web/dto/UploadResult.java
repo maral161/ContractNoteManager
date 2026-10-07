@@ -5,6 +5,6 @@ public record UploadResult(String fileName, Outcome outcome, Long noteId, Long o
         String message) {
 
     public enum Outcome {
-        MATCHED, UNMATCHED, EXTRACTION_FAILED, DUPLICATE, INVALID_FILE
+        MATCHED, PARTIALLY_MATCHED, NO_MATCH, EXTRACTION_FAILED, DUPLICATE, INVALID_FILE
     }
 }

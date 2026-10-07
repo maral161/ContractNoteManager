@@ -7,6 +7,7 @@ import java.util.List;
 import org.springframework.data.jpa.domain.Specification;
 
 import com.contractnotemanager.domain.ContractNote;
+import com.contractnotemanager.domain.ContractNoteStatus;
 import com.contractnotemanager.domain.Order;
 import com.contractnotemanager.domain.OrderAllocation;
 import com.contractnotemanager.web.dto.OrderFilter;
@@ -62,8 +63,22 @@ final class OrderSpecifications {
             if (f.noteMatch() != null && f.noteMatch() != OrderFilter.NoteMatch.ALL) {
                 Subquery<Long> sub = query.subquery(Long.class);
                 Root<ContractNote> n = sub.from(ContractNote.class);
-                sub.select(n.get("id")).where(cb.equal(n.get("order"), root));
-                p.add(f.noteMatch() == OrderFilter.NoteMatch.MATCHED ? cb.exists(sub) : cb.not(cb.exists(sub)));
+                switch (f.noteMatch()) {
+                    case MATCHED -> {
+                        sub.select(n.get("id")).where(cb.equal(n.get("order"), root),
+                                cb.equal(n.get("status"), ContractNoteStatus.MATCHED));
+                        p.add(cb.exists(sub));
+                    }
+                    case PARTIAL -> {
+                        sub.select(n.get("id")).where(cb.equal(n.get("order"), root),
+                                cb.equal(n.get("status"), ContractNoteStatus.PARTIALLY_MATCHED));
+                        p.add(cb.exists(sub));
+                    }
+                    default -> {
+                        sub.select(n.get("id")).where(cb.equal(n.get("order"), root));
+                        p.add(cb.not(cb.exists(sub)));
+                    }
+                }
             }
             return cb.and(p.toArray(Predicate[]::new));
         };

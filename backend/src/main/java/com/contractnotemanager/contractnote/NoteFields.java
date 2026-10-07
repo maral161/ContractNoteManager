@@ -57,14 +57,6 @@ public record NoteFields(
         if (brokerValue == null) {
             errors.add("Broker is missing");
         }
-        if (qty != null && px != null && settle != null) {
-            BigDecimal gross = qty.multiply(px);
-            BigDecimal tolerance = (comm == null ? BigDecimal.ZERO : comm.abs()).add(BigDecimal.ONE);
-            if (gross.subtract(settle.abs()).abs().compareTo(tolerance) > 0) {
-                warnings.add("Quantity × price (" + gross.stripTrailingZeros().toPlainString()
-                        + ") differs from the settlement amount (" + settle.toPlainString() + ")");
-            }
-        }
         String sideValue = blankToNull(side) == null ? null : side.trim().toLowerCase();
         if (sideValue != null && !sideValue.equals("buy") && !sideValue.equals("sell")) {
             sideValue = null;

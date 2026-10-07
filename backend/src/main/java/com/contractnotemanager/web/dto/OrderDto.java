@@ -38,6 +38,7 @@ public record OrderDto(
         String source,
         String comment,
         boolean noteMatched,
+        String noteStatus,
         boolean locallyModified,
         boolean syncConflict,
         boolean detailsMissing,

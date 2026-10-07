@@ -60,10 +60,11 @@ abstract class IntegrationTest {
         @Bean
         @Primary
         ContractNoteExtractor fakeExtractor() {
-            Map<String, ContractNoteExtraction> byName = Map.of(
-                    "abn", SampleNotes.ABN_AMRO_ABB,
-                    "ubs", SampleNotes.UBS_APPLE,
-                    "swedbank", SampleNotes.SWEDBANK_BARCLAYS);
+            Map<String, ContractNoteExtraction> byName = new java.util.LinkedHashMap<>();
+            byName.put("ubs-corrected", SampleNotes.UBS_APPLE_CORRECTED);
+            byName.put("abn", SampleNotes.ABN_AMRO_ABB);
+            byName.put("ubs", SampleNotes.UBS_APPLE);
+            byName.put("swedbank", SampleNotes.SWEDBANK_BARCLAYS);
             return (pdf, fileName) -> {
                 if (fileName.contains("unreadable")) {
                     throw new ExtractionException("Claude API error: overloaded");

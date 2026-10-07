@@ -48,7 +48,7 @@ public class OrderController {
             "settlementDate", "settlementDate",
             "validTo", "validTo",
             "owner", "owner.name",
-            "noteMatched", "noteMatched");
+            "noteMatched", "noteStatus");
 
     private final OrderService orders;
     private final ContractNoteService notes;

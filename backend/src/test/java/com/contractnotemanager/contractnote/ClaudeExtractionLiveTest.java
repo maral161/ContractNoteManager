@@ -25,16 +25,17 @@ class ClaudeExtractionLiveTest {
 
     @ParameterizedTest
     @CsvSource({
-            "abn-amro_abb.pdf,      CH0012221716, SEK, 1864, 435.52, 811809.00, ABN Amro, 1200",
-            "ubs_apple.pdf,         US0378331005, USD, 473,  219.65, 103894.00, UBS,      1200",
-            "swedbank_barclays.pdf, GB0031348658, GBP, 98,   123.47, 12100.10,  Swedbank, 134"})
-    void readsTheSampleNotes(String file, String isin, String currency, String quantity, String price,
+            "abn-amro_abb.pdf,      CH0012221716, sell, SEK, 1864, 435.52, 810609.00, ABN Amro, 1200",
+            "ubs_apple.pdf,         US0378331005, sell, USD, 473,  219.65, 12934.00,  UBS,      960",
+            "swedbank_barclays.pdf, GB0031348658, buy,  GBP, 98,   123.47, 12234.06,  Swedbank, 134"})
+    void readsTheSampleNotes(String file, String isin, String side, String currency, String quantity, String price,
             String settlement, String broker, String commission) throws Exception {
         byte[] pdf = Files.readAllBytes(Path.of("../docs/samples/contract-notes", file));
         NoteFields f = NoteFields.from(extractor.extract(pdf, file).fields());
 
         assertThat(f.errors()).isEmpty();
         assertThat(f.isin()).isEqualTo(isin);
+        assertThat(f.side()).isEqualTo(side);
         assertThat(f.currency()).isEqualTo(currency);
         assertThat(f.quantity()).isEqualByComparingTo(quantity);
         assertThat(f.price()).isEqualByComparingTo(price);

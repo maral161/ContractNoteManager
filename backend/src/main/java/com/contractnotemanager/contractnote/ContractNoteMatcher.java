@@ -6,96 +6,154 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
+import com.contractnotemanager.domain.ContractNoteStatus;
 import com.contractnotemanager.domain.Order;
 import com.contractnotemanager.domain.OrderStatus;
 
 /**
- * Matching rules (plan section 4.4.2). A candidate must be TRADED and agree on ISIN, currency,
- * quantity (amount orders: amount), exact price, settlement amount within ±1 currency unit
- * (absolute values) and side when the note states it. Exactly one candidate is a match.
+ * Matching rules. ISIN and Buy/Sell must agree exactly; then six checks are scored:
+ * <ol>
+ * <li>currency</li>
+ * <li>quantity (amount orders: quantity × price against the order amount, ±1)</li>
+ * <li>price (exact)</li>
+ * <li>commission (note against order)</li>
+ * <li>settlement amount within ±1 – Sharpfin's order amount excludes commission, so the note's
+ * commission is taken out first (sell: amount + commission, buy: amount − commission)</li>
+ * <li>the note adds up: price × quantity + commission (buy) / − commission (sell) = settlement amount, ±1</li>
+ * </ol>
+ * 6 of 6 → MATCHED, 4–5 → PARTIALLY_MATCHED, otherwise NO_MATCH. Only TRADED orders are candidates.
  */
 public final class ContractNoteMatcher {
 
-    static final BigDecimal SETTLEMENT_TOLERANCE = BigDecimal.ONE;
+    public static final int CHECK_COUNT = 6;
+    static final int PARTIAL_MINIMUM = 4; // more than 50 % of the six checks
+    static final BigDecimal TOLERANCE = BigDecimal.ONE;
 
     private ContractNoteMatcher() {
     }
 
-    public record Result(Order order, String reason) {
-        public boolean matched() {
+    /** One of the six checks, with the values compared (shown in the UI). */
+    public record Check(String name, boolean ok, String noteValue, String orderValue) {
+    }
+
+    public record Result(ContractNoteStatus status, Order order, int score, List<Check> checks, String reason) {
+        public boolean linked() {
             return order != null;
         }
     }
 
     /**
-     * @param candidates orders without a contract note: the ticked orders on upload, or every TRADED
-     *                   order (plus same-ISIN orders, for the explanation) on "match again"
+     * @param candidates orders without a matched contract note (the ticked orders on upload, all orders on re-evaluation)
      * @param scope      wording for the explanation, e.g. "selected" or "traded"
      */
     public static Result match(NoteFields note, List<Order> candidates, String scope) {
         if (!note.isComplete()) {
-            return new Result(null, "Check the values read from the PDF: " + String.join("; ", note.errors()));
+            return noMatch("Check the values read from the PDF: " + String.join("; ", note.errors()));
         }
-        List<Order> matches = candidates.stream()
-                .filter(o -> o.getStatus() == OrderStatus.TRADED)
-                .filter(o -> differences(note, o).isEmpty())
-                .toList();
-        if (matches.size() == 1) {
-            return new Result(matches.get(0), null);
+        if (note.side() == null) {
+            return noMatch("Buy/Sell is not stated on the contract note");
         }
-        if (matches.size() > 1) {
-            return new Result(null, matches.size() + " " + scope + " orders match this note equally ("
-                    + String.join(", ", matches.stream().map(ContractNoteMatcher::label).toList())
-                    + "); tick only the right one and upload again");
-        }
-        List<Order> sameIsin = candidates.stream()
+        List<Order> sameInstrument = candidates.stream()
                 .filter(o -> note.isin().equalsIgnoreCase(o.getAsset().getIsin()))
+                .filter(o -> note.side().equalsIgnoreCase(o.getSide()))
                 .toList();
-        if (sameIsin.isEmpty()) {
-            return new Result(null, "No " + scope + " order with ISIN " + note.isin() + " (" + note.instrumentName() + ")");
+        if (sameInstrument.isEmpty()) {
+            boolean otherSide = candidates.stream().anyMatch(o -> note.isin().equalsIgnoreCase(o.getAsset().getIsin()));
+            return noMatch(otherSide
+                    ? "No " + scope + " " + note.side() + " order with ISIN " + note.isin()
+                            + " (only the opposite side exists)"
+                    : "No " + scope + " order with ISIN " + note.isin() + " (" + note.instrumentName() + ")");
         }
-        Order closest = sameIsin.stream()
-                .min(Comparator.comparing((Order o) -> o.getStatus() != OrderStatus.TRADED)
-                        .thenComparing(o -> differences(note, o).size()))
-                .orElseThrow();
-        List<String> reasons = new ArrayList<>();
-        if (closest.getStatus() != OrderStatus.TRADED) {
-            reasons.add("order is " + closest.getStatus().label() + ", not Traded");
+        List<Order> traded = sameInstrument.stream().filter(o -> o.getStatus() == OrderStatus.TRADED).toList();
+        if (traded.isEmpty()) {
+            Order o = sameInstrument.get(0);
+            return noMatch(label(o) + " is " + o.getStatus().label() + ", not Traded yet");
         }
-        reasons.addAll(differences(note, closest));
-        return new Result(null, label(closest) + ": " + String.join("; ", reasons));
+
+        record Scored(Order order, List<Check> checks, int score) {
+        }
+        List<Scored> scored = traded.stream()
+                .map(o -> {
+                    List<Check> checks = checks(note, o);
+                    return new Scored(o, checks, (int) checks.stream().filter(Check::ok).count());
+                })
+                .sorted(Comparator.comparingInt(Scored::score).reversed())
+                .toList();
+        Scored best = scored.get(0);
+        long tied = scored.stream().filter(s -> s.score() == best.score()).count();
+        if (best.score() < PARTIAL_MINIMUM) {
+            return new Result(ContractNoteStatus.NO_MATCH, null, best.score(), best.checks(),
+                    "Closest: " + label(best.order()) + " – only " + best.score() + " of " + CHECK_COUNT
+                            + " checks pass (" + failed(best.checks()) + ")");
+        }
+        if (tied > 1) {
+            return new Result(ContractNoteStatus.NO_MATCH, null, best.score(), best.checks(),
+                    tied + " " + scope + " orders fit equally well ("
+                            + String.join(", ", scored.stream().filter(s -> s.score() == best.score())
+                                    .map(s -> label(s.order())).toList())
+                            + "); tick only the right one and upload again");
+        }
+        if (best.score() == CHECK_COUNT) {
+            return new Result(ContractNoteStatus.MATCHED, best.order(), best.score(), best.checks(), null);
+        }
+        return new Result(ContractNoteStatus.PARTIALLY_MATCHED, best.order(), best.score(), best.checks(),
+                best.score() + " of " + CHECK_COUNT + " checks pass – " + failed(best.checks()));
     }
 
-    /** Every rule the order breaks; empty when note and order agree. */
-    static List<String> differences(NoteFields note, Order o) {
-        List<String> diffs = new ArrayList<>();
-        if (!note.isin().equalsIgnoreCase(o.getAsset().getIsin())) {
-            diffs.add("ISIN differs (" + note.isin() + " vs " + o.getAsset().getIsin() + ")");
-        }
-        if (!note.currency().equalsIgnoreCase(o.getCurrencyCode())) {
-            diffs.add("currency differs (" + note.currency() + " vs " + o.getCurrencyCode() + ")");
-        }
+    /** The six checks for one order. */
+    static List<Check> checks(NoteFields n, Order o) {
+        List<Check> checks = new ArrayList<>();
+        boolean sell = "sell".equalsIgnoreCase(n.side());
+        BigDecimal commission = n.commission();
+        BigDecimal gross = n.quantity().multiply(n.price());
+
+        checks.add(new Check("Currency", n.currency().equalsIgnoreCase(o.getCurrencyCode()), n.currency(),
+                o.getCurrencyCode()));
+
         if (o.isAmountOrder()) {
-            if (note.settlementAmount().subtract(o.getValue().abs()).abs().compareTo(SETTLEMENT_TOLERANCE) > 0) {
-                diffs.add("amount differs (" + plain(note.settlementAmount()) + " vs " + plain(o.getValue()) + ")");
-            }
-        } else if (note.quantity().compareTo(o.getValue()) != 0) {
-            diffs.add("quantity differs (" + plain(note.quantity()) + " vs " + plain(o.getValue()) + ")");
+            boolean ok = within(gross, o.getValue().abs());
+            checks.add(new Check("Amount (quantity × price)", ok, plain(gross.setScale(2, RoundingMode.HALF_UP)),
+                    plain(o.getValue())));
+        } else {
+            checks.add(new Check("Quantity", n.quantity().compareTo(o.getValue()) == 0, plain(n.quantity()),
+                    plain(o.getValue())));
         }
-        if (o.getPrice() == null || note.price().compareTo(o.getPrice()) != 0) {
-            diffs.add("price differs (" + plain(note.price()) + " vs " + plain(o.getPrice()) + ")");
-        }
-        if (o.getSettlementAmount() != null) {
-            BigDecimal diff = note.settlementAmount().subtract(o.getSettlementAmount().abs()).abs();
-            if (diff.compareTo(SETTLEMENT_TOLERANCE) > 0) {
-                diffs.add("settlement amount differs by " + diff.setScale(2, RoundingMode.HALF_UP).toPlainString()
-                        + " " + o.getCurrencyCode());
-            }
-        }
-        if (note.side() != null && !note.side().equalsIgnoreCase(o.getSide())) {
-            diffs.add("side differs (" + note.side() + " vs " + o.getSide() + ")");
-        }
-        return diffs;
+
+        checks.add(new Check("Price", o.getPrice() != null && n.price().compareTo(o.getPrice()) == 0,
+                plain(n.price()), plain(o.getPrice())));
+
+        BigDecimal orderCommission = o.getCommission() == null ? BigDecimal.ZERO : o.getCommission();
+        checks.add(new Check("Commission", commission.compareTo(orderCommission) == 0, plain(commission),
+                plain(orderCommission)));
+
+        // Sharpfin's settlement amount does not include commission: compare without it
+        BigDecimal noteWithoutCommission = sell ? n.settlementAmount().add(commission)
+                : n.settlementAmount().subtract(commission);
+        BigDecimal orderAmount = o.getSettlementAmount() == null ? null : o.getSettlementAmount().abs();
+        checks.add(new Check("Settlement amount (±1, excl. commission)",
+                orderAmount != null && within(noteWithoutCommission, orderAmount),
+                plain(noteWithoutCommission.setScale(2, RoundingMode.HALF_UP)), plain(orderAmount)));
+
+        BigDecimal expected = sell ? gross.subtract(commission) : gross.add(commission);
+        checks.add(new Check("Note adds up (price × quantity " + (sell ? "−" : "+") + " commission)",
+                within(expected, n.settlementAmount()),
+                plain(expected.setScale(2, RoundingMode.HALF_UP)), plain(n.settlementAmount())));
+        return checks;
+    }
+
+    private static boolean within(BigDecimal a, BigDecimal b) {
+        return a.subtract(b).abs().compareTo(TOLERANCE) <= 0;
+    }
+
+    private static String failed(List<Check> checks) {
+        return checks.stream().filter(c -> !c.ok())
+                .map(c -> c.name().replaceAll(" \\(.*\\)", "").toLowerCase() + " differs (" + c.noteValue() + " vs "
+                        + c.orderValue() + ")")
+                .reduce((a, b) -> a + "; " + b).orElse("");
+    }
+
+    private static Result noMatch(String reason) {
+        return new Result(ContractNoteStatus.NO_MATCH, null, 0, List.of(), reason);
     }
 
     static String label(Order o) {
@@ -103,7 +161,7 @@ public final class ContractNoteMatcher {
         return side + " " + o.getAsset().getName() + " " + plain(o.getValue()) + " @ " + plain(o.getPrice());
     }
 
-    private static String plain(BigDecimal value) {
+    static String plain(BigDecimal value) {
         return value == null ? "–" : value.stripTrailingZeros().toPlainString();
     }
 }

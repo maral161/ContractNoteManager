@@ -61,6 +61,11 @@ public class ContractNote {
     @JoinColumn(name = "order_id")
     private Order order;
     private Instant matchedAt;
+    /** How many of the six checks passed against the linked or closest order. */
+    private Integer matchScore;
+    /** The six checks with the values compared (JSON list). */
+    @JdbcTypeCode(SqlTypes.JSON)
+    private String matchChecks;
 
     @CreationTimestamp
     private Instant createdAt;

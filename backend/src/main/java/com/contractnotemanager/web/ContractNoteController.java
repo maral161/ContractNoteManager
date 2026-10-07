@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.contractnotemanager.contractnote.ContractNoteService;
+import com.contractnotemanager.domain.ContractNoteStatus;
 import com.contractnotemanager.web.dto.ContractNoteDto;
 import com.contractnotemanager.web.dto.UpdateNoteRequest;
 import com.contractnotemanager.web.dto.UploadResult;
@@ -46,15 +47,22 @@ public class ContractNoteController {
         return notes.upload(files, orderIds);
     }
 
-    /** The "Unmatched Contract Notes" list (unmatched and unreadable notes). */
+    /** All contract notes, optionally only one status. */
     @GetMapping
-    public List<ContractNoteDto> listOpen() {
-        return notes.listOpen();
+    public List<ContractNoteDto> list(@RequestParam(required = false) ContractNoteStatus status) {
+        return notes.list(status);
     }
 
+    /** Number of notes per status, plus "open" (not matched yet) for the tab badge. */
     @GetMapping("/count")
-    public Map<String, Long> countOpen() {
-        return Map.of("unmatched", notes.countOpen());
+    public Map<String, Long> counts() {
+        return notes.counts();
+    }
+
+    /** Evaluates all partially matched and unmatched notes again against the current orders. */
+    @PostMapping("/reevaluate")
+    public ContractNoteService.ReevaluationSummary reevaluateAll() {
+        return notes.reevaluateOpen();
     }
 
     @GetMapping("/{id}")
@@ -73,14 +81,27 @@ public class ContractNoteController {
                 .body(file.content());
     }
 
+    /** Corrects the values read from the PDF; the note is evaluated again right away. */
     @PatchMapping("/{id}")
-    public ContractNoteDto update(@PathVariable Long id, @RequestBody UpdateNoteRequest request) {
+    public UploadResult update(@PathVariable Long id, @RequestBody UpdateNoteRequest request) {
         return notes.update(id, request);
     }
 
-    @PostMapping("/{id}/rematch")
-    public UploadResult rematch(@PathVariable Long id) {
-        return notes.rematch(id);
+    @PostMapping("/{id}/reevaluate")
+    public UploadResult reevaluate(@PathVariable Long id) {
+        return notes.reevaluate(id);
+    }
+
+    /** Lets Claude read the stored PDF again. */
+    @PostMapping("/{id}/reread")
+    public UploadResult reread(@PathVariable Long id) {
+        return notes.reread(id);
+    }
+
+    /** Partially matched note: take its price, quantity, commission and broker into the linked order. */
+    @PostMapping("/{id}/apply-to-order")
+    public UploadResult applyToOrder(@PathVariable Long id) {
+        return notes.applyToOrder(id);
     }
 
     @DeleteMapping("/{id}")

@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import com.contractnotemanager.config.SharpfinProperties;
+import com.contractnotemanager.contractnote.ContractNoteService;
 import com.contractnotemanager.domain.ImportRun;
 import com.contractnotemanager.domain.ImportRunStatus;
 import com.contractnotemanager.repository.ImportRunRepository;
@@ -33,10 +34,12 @@ public class ImportService {
     private final OrderImporter importer;
     private final ImportRunRepository runs;
     private final SharpfinProperties props;
+    private final ContractNoteService noteService;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     public ImportService(SharpfinClient sharpfin, OrderImporter importer, ImportRunRepository runs,
-            SharpfinProperties props) {
+            SharpfinProperties props, ContractNoteService noteService) {
+        this.noteService = noteService;
         this.sharpfin = sharpfin;
         this.props = props;
         this.importer = importer;
@@ -109,6 +112,13 @@ public class ImportService {
             }
             boolean clean = complete && run.getFailedCount() == 0 && run.getDetailsMissingCount() == 0;
             run.setStatus(clean ? ImportRunStatus.SUCCESS : ImportRunStatus.PARTIAL);
+        }
+        if (run.getCreatedCount() + run.getUpdatedCount() > 0) {
+            try {
+                noteService.reevaluateOpen(); // new or changed orders may fit uploaded contract notes
+            } catch (RuntimeException e) {
+                log.warn("Re-evaluating contract notes after the import failed: {}", e.getMessage());
+            }
         }
         run.setFinishedAt(Instant.now());
         log.info("Import {} {} {}..{}: {} created, {} updated, {} skipped, {} conflicts, {} failed",

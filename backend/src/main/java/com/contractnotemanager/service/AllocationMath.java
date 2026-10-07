@@ -42,6 +42,31 @@ public final class AllocationMath {
     }
 
     /**
+     * Scales the allocation quantities to a new order total, keeping their proportions. Rounded to the
+     * asset's quantity decimals; the rounding remainder goes to the largest allocation.
+     */
+    public static List<BigDecimal> scaleQuantities(List<BigDecimal> current, BigDecimal newTotal, int decimals) {
+        List<BigDecimal> scaled = new ArrayList<>();
+        BigDecimal sum = current.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (current.isEmpty()) {
+            return scaled;
+        }
+        int largest = 0;
+        for (int i = 0; i < current.size(); i++) {
+            BigDecimal share = sum.signum() == 0
+                    ? (i == 0 ? newTotal : BigDecimal.ZERO)
+                    : newTotal.multiply(current.get(i)).divide(sum, decimals, RoundingMode.HALF_UP);
+            scaled.add(share);
+            if (current.get(i).compareTo(current.get(largest)) > 0) {
+                largest = i;
+            }
+        }
+        BigDecimal remainder = newTotal.subtract(scaled.stream().reduce(BigDecimal.ZERO, BigDecimal::add));
+        scaled.set(largest, scaled.get(largest).add(remainder));
+        return scaled;
+    }
+
+    /**
      * Recalculates the post-trade figures from the pre-trade holding and the new quantity:
      * post = pre − qty (sell) or pre + qty (buy); post % = pre % × post / pre; order weight = post % − pre %.
      */

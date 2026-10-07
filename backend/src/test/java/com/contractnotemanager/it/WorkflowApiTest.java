@@ -30,7 +30,7 @@ class WorkflowApiTest extends IntegrationTest {
     }
 
     @Test
-    void contractNotesConfirmTheMatchingTradedOrders() throws Exception {
+    void contractNotesAreMatchedPartiallyMatchedOrNotMatched() throws Exception {
         long abb = orderId("ABB");
         long apple = orderId("Apple Inc");
         long barclays = orderId("Barclays PLC");
@@ -40,64 +40,47 @@ class WorkflowApiTest extends IntegrationTest {
         }
         JsonNode traded = getJson("/api/v1/orders/" + abb);
         assertThat(traded.path("status").asText()).isEqualTo("TRADED");
-        assertThat(traded.path("tradedDate").isMissingNode()).isFalse();
-        // Traded waits for the contract note: the blue button is refused
-        advance(abb, "TRADED", status().isConflict());
+        advance(abb, "TRADED", status().isConflict()); // Traded waits for the contract note
 
         JsonNode results = upload(List.of(abb, apple, barclays),
                 "abn-amro_abb.pdf", "ubs_apple.pdf", "swedbank_barclays.pdf");
         assertThat(results.get(0).path("outcome").asText()).isEqualTo("MATCHED");
-        assertThat(results.get(1).path("outcome").asText()).isEqualTo("MATCHED");
-        assertThat(results.get(2).path("outcome").asText()).isEqualTo("UNMATCHED");
-        assertThat(results.get(2).path("message").asText())
-                .contains("price differs (123.47 vs 123.57)")
-                .contains("settlement amount differs by 9.76 GBP");
+        assertThat(results.get(1).path("outcome").asText()).isEqualTo("NO_MATCH");     // UBS typo: does not add up
+        assertThat(results.get(2).path("outcome").asText()).isEqualTo("NO_MATCH");     // price + commission differ
+        assertThat(results.get(2).path("message").asText()).contains("price differs (123.47 vs 123.57)");
 
         JsonNode abbOrder = getJson("/api/v1/orders/" + abb);
         assertThat(abbOrder.path("status").asText()).isEqualTo("CONFIRMED");
-        assertThat(abbOrder.path("noteMatched").asBoolean()).isTrue();
-        assertThat(abbOrder.path("price").decimalValue()).isEqualByComparingTo("435.52"); // nothing overwritten
-        assertThat(abbOrder.path("commission").decimalValue()).isEqualByComparingTo("1200");
+        assertThat(abbOrder.path("noteStatus").asText()).isEqualTo("MATCHED");
         JsonNode note = getJson("/api/v1/orders/" + abb + "/contract-note");
-        assertThat(note.path("broker").asText()).isEqualTo("ABN Amro");
-        assertThat(note.path("settlementAmount").decimalValue()).isEqualByComparingTo("811809.00");
+        assertThat(note.path("matchScore").asInt()).isEqualTo(6);
+        assertThat(note.path("checks")).hasSize(6);
 
-        JsonNode unmatched = getJson("/api/v1/contract-notes");
-        assertThat(unmatched).hasSize(1);
-        assertThat(unmatched.get(0).path("isin").asText()).isEqualTo("GB0031348658");
-        assertThat(getJson("/api/v1/contract-notes/count").path("unmatched").asInt()).isEqualTo(1);
-
-        // the same PDF twice is refused
+        // all notes are listed; the tab badge counts the ones not matched yet
+        assertThat(getJson("/api/v1/contract-notes")).hasSize(3);
+        assertThat(getJson("/api/v1/contract-notes?status=NO_MATCH")).hasSize(2);
+        assertThat(getJson("/api/v1/contract-notes/count").path("open").asInt()).isEqualTo(2);
         assertThat(upload(List.of(abb), "abn-amro_abb.pdf").get(0).path("outcome").asText()).isEqualTo("DUPLICATE");
 
-        // filters: only matched orders, by traded date
-        JsonNode matched = getJson("/api/v1/orders?noteMatch=MATCHED&dateType=TRADED&from="
-                + java.time.LocalDate.now() + "&to=" + java.time.LocalDate.now());
-        assertThat(matched.path("totalElements").asInt()).isEqualTo(2);
+        // changing the Barclays order to the note's price and commission re-evaluates the note: now matched
+        int version = getJson("/api/v1/orders/" + barclays).path("version").asInt();
+        mvc.perform(patch("/api/v1/orders/" + barclays).contentType(MediaType.APPLICATION_JSON)
+                .content(jsonOf("version", version, "price", "123.47", "commission", 134)))
+                .andExpect(status().isOk());
+        JsonNode barclaysOrder = getJson("/api/v1/orders/" + barclays);
+        assertThat(barclaysOrder.path("status").asText()).isEqualTo("CONFIRMED");
+        assertThat(barclaysOrder.path("noteStatus").asText()).isEqualTo("MATCHED");
 
         // confirmed → allocated, then locked for edits
         advance(abb, "CONFIRMED", status().isOk());
-        assertThat(getJson("/api/v1/orders/" + abb).path("status").asText()).isEqualTo("ALLOCATED");
         mvc.perform(patch("/api/v1/orders/" + abb).contentType(MediaType.APPLICATION_JSON)
                 .content(jsonOf("version", getJson("/api/v1/orders/" + abb).path("version").asInt(), "price", 1)))
                 .andExpect(status().isConflict());
 
-        // correcting the Barclays order price makes the note match on "match again"
-        int version = getJson("/api/v1/orders/" + barclays).path("version").asInt();
-        mvc.perform(patch("/api/v1/orders/" + barclays).contentType(MediaType.APPLICATION_JSON)
-                .content(jsonOf("version", version, "price", "123.47")))
-                .andExpect(status().isOk());
-        long noteId = unmatched.get(0).path("id").asLong();
-        JsonNode rematch = json.readTree(mvc.perform(post("/api/v1/contract-notes/" + noteId + "/rematch"))
-                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
-        assertThat(rematch.path("outcome").asText()).isEqualTo("MATCHED"); // 12,100.06 vs 12,100.10
-        assertThat(getJson("/api/v1/contract-notes")).isEmpty();
-
-        // deleting a matched order puts its note back on the unmatched list
-        mvc.perform(delete("/api/v1/orders/" + apple)).andExpect(status().isNoContent());
-        JsonNode back = getJson("/api/v1/contract-notes");
-        assertThat(back).hasSize(1);
-        assertThat(back.get(0).path("reason").asText()).contains("was deleted");
+        // deleting a matched order puts its note back to "no match"
+        mvc.perform(delete("/api/v1/orders/" + barclays)).andExpect(status().isNoContent());
+        JsonNode back = getJson("/api/v1/contract-notes?status=NO_MATCH");
+        assertThat(back.findValuesAsText("fileName")).contains("swedbank_barclays.pdf");
 
         JsonNode history = getJson("/api/v1/orders/" + abb + "/status-history");
         assertThat(history.findValuesAsText("toStatus"))
@@ -106,23 +89,67 @@ class WorkflowApiTest extends IntegrationTest {
     }
 
     @Test
+    void partiallyMatchedNoteCanUpdateItsOrder() throws Exception {
+        long apple = orderId("Apple Inc");
+        advance(apple, "NEW", status().isOk());
+        advance(apple, "ON_MARKET", status().isOk());
+        JsonNode result = upload(List.of(apple), "ubs-corrected.pdf").get(0);
+        assertThat(result.path("outcome").asText()).isEqualTo("PARTIALLY_MATCHED");
+        assertThat(result.path("message").asText()).contains("commission differs (960 vs 0)");
+        JsonNode order = getJson("/api/v1/orders/" + apple);
+        assertThat(order.path("noteStatus").asText()).isEqualTo("PARTIALLY_MATCHED");
+        assertThat(order.path("status").asText()).isEqualTo("TRADED");
+
+        long noteId = result.path("noteId").asLong();
+        JsonNode applied = json.readTree(mvc.perform(post("/api/v1/contract-notes/" + noteId + "/apply-to-order"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(applied.path("outcome").asText()).isEqualTo("MATCHED");
+        JsonNode updated = getJson("/api/v1/orders/" + apple);
+        assertThat(updated.path("commission").decimalValue()).isEqualByComparingTo("960");
+        assertThat(updated.path("counterpart").asText()).isEqualTo("UBS");
+        assertThat(updated.path("status").asText()).isEqualTo("CONFIRMED");
+        assertThat(updated.path("locallyModified").asBoolean()).isTrue();
+    }
+
+    @Test
+    void notesUploadedEarlierAreMatchedOnceTheOrderIsTraded() throws Exception {
+        long abb = orderId("ABB");
+        JsonNode result = upload(List.of(abb), "abn-amro_abb.pdf").get(0);
+        assertThat(result.path("outcome").asText()).isEqualTo("NO_MATCH"); // the order is still New
+        assertThat(result.path("message").asText()).contains("not Traded yet");
+
+        advance(abb, "NEW", status().isOk());
+        advance(abb, "ON_MARKET", status().isOk()); // becomes Traded → open notes are re-evaluated
+        assertThat(getJson("/api/v1/orders/" + abb).path("status").asText()).isEqualTo("CONFIRMED");
+
+        JsonNode summary = json.readTree(mvc.perform(post("/api/v1/contract-notes/reevaluate"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(summary.path("evaluated").asInt()).isZero(); // nothing left open
+    }
+
+    @Test
     void notesOnlyMatchTheTickedOrders() throws Exception {
         long abb = orderId("ABB");
         advance(abb, "NEW", status().isOk());
         advance(abb, "ON_MARKET", status().isOk());
         JsonNode result = upload(List.of(orderId("Tesla Inc")), "abn-amro_abb.pdf").get(0);
-        assertThat(result.path("outcome").asText()).isEqualTo("UNMATCHED");
+        assertThat(result.path("outcome").asText()).isEqualTo("NO_MATCH");
         assertThat(result.path("message").asText()).contains("No selected order with ISIN CH0012221716");
+        // "re-evaluate" looks at all orders, so the note now finds ABB
+        long noteId = result.path("noteId").asLong();
+        JsonNode again = json.readTree(mvc.perform(post("/api/v1/contract-notes/" + noteId + "/reevaluate"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(again.path("outcome").asText()).isEqualTo("MATCHED");
     }
 
     @Test
-    void unreadablePdfGoesToTheUnmatchedList() throws Exception {
+    void unreadablePdfIsListedAsNotReadable() throws Exception {
         MockMultipartFile file = new MockMultipartFile("files", "unreadable.pdf", "application/pdf",
                 "%PDF-1.4 broken".getBytes());
         JsonNode result = json.readTree(mvc.perform(multipart("/api/v1/contract-notes").file(file))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get(0);
         assertThat(result.path("outcome").asText()).isEqualTo("EXTRACTION_FAILED");
-        assertThat(getJson("/api/v1/contract-notes").get(0).path("status").asText()).isEqualTo("EXTRACTION_FAILED");
+        assertThat(getJson("/api/v1/contract-notes?status=EXTRACTION_FAILED")).hasSize(1);
 
         MockMultipartFile notPdf = new MockMultipartFile("files", "note.txt", "text/plain", "hello".getBytes());
         JsonNode invalid = json.readTree(mvc.perform(multipart("/api/v1/contract-notes").file(notPdf))
@@ -196,7 +223,13 @@ class WorkflowApiTest extends IntegrationTest {
     private JsonNode upload(List<Long> orderIds, String... sampleFiles) throws Exception {
         var request = multipart("/api/v1/contract-notes");
         for (String name : sampleFiles) {
-            request.file(new MockMultipartFile("files", name, "application/pdf", Files.readAllBytes(SAMPLES.resolve(name))));
+            Path file = SAMPLES.resolve(name.replace("ubs-corrected", "ubs_apple"));
+            byte[] content = Files.readAllBytes(file);
+            if (name.startsWith("ubs-corrected")) {
+                content = (new String(content, java.nio.charset.StandardCharsets.ISO_8859_1) + "\n%corrected")
+                        .getBytes(java.nio.charset.StandardCharsets.ISO_8859_1); // a different file for the test
+            }
+            request.file(new MockMultipartFile("files", name, "application/pdf", content));
         }
         orderIds.forEach(id -> request.param("orderIds", String.valueOf(id)));
         return json.readTree(mvc.perform(request).andExpect(status().isOk()).andReturn().getResponse()

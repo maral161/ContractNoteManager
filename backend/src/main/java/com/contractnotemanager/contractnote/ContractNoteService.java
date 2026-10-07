@@ -8,8 +8,10 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,50 +20,63 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.contractnotemanager.domain.Broker;
 import com.contractnotemanager.domain.ContractNote;
 import com.contractnotemanager.domain.ContractNoteStatus;
 import com.contractnotemanager.domain.Order;
+import com.contractnotemanager.domain.OrderAllocation;
 import com.contractnotemanager.domain.OrderStatus;
 import com.contractnotemanager.domain.OrderStatusHistory;
 import com.contractnotemanager.domain.StatusTrigger;
+import com.contractnotemanager.repository.BrokerRepository;
 import com.contractnotemanager.repository.ContractNoteRepository;
 import com.contractnotemanager.repository.OrderRepository;
 import com.contractnotemanager.repository.OrderStatusHistoryRepository;
+import com.contractnotemanager.service.AllocationMath;
 import com.contractnotemanager.web.dto.ContractNoteDto;
 import com.contractnotemanager.web.dto.UpdateNoteRequest;
 import com.contractnotemanager.web.dto.UploadResult;
 import com.contractnotemanager.web.error.ApiException;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * Upload → Claude reads the PDF → checks → match against the ticked orders (plan section 4.4.2).
- * Nothing on the order is overwritten by the note; a match only links the note and confirms the order.
+ * Upload → Claude reads the PDF → six checks against the orders → Matched / Partially matched / No match.
+ * A match confirms the order. A partial match is linked to its order, which can take the note's values.
+ * Open notes are evaluated again whenever orders change ("re-evaluate").
  */
 @Service
 public class ContractNoteService {
 
     private static final Logger log = LoggerFactory.getLogger(ContractNoteService.class);
-    private static final List<ContractNoteStatus> OPEN = List.of(ContractNoteStatus.UNMATCHED,
-            ContractNoteStatus.EXTRACTION_FAILED);
+    /** Notes that are not matched yet and are re-evaluated when orders change. */
+    private static final List<ContractNoteStatus> REEVALUATED = List.of(ContractNoteStatus.PARTIALLY_MATCHED,
+            ContractNoteStatus.NO_MATCH);
+    private static final List<ContractNoteStatus> OPEN = List.of(ContractNoteStatus.PARTIALLY_MATCHED,
+            ContractNoteStatus.NO_MATCH, ContractNoteStatus.EXTRACTION_FAILED);
 
     private final ContractNoteRepository notes;
     private final OrderRepository orders;
     private final OrderStatusHistoryRepository history;
+    private final BrokerRepository brokers;
     private final ContractNoteExtractor extractor;
     private final ObjectMapper json;
     private final TransactionTemplate tx;
 
     public ContractNoteService(ContractNoteRepository notes, OrderRepository orders,
-            OrderStatusHistoryRepository history, ContractNoteExtractor extractor, ObjectMapper json,
-            PlatformTransactionManager txManager) {
+            OrderStatusHistoryRepository history, BrokerRepository brokers, ContractNoteExtractor extractor,
+            ObjectMapper json, PlatformTransactionManager txManager) {
         this.notes = notes;
         this.orders = orders;
         this.history = history;
+        this.brokers = brokers;
         this.extractor = extractor;
         this.json = json;
         this.tx = new TransactionTemplate(txManager);
     }
+
+    // ---------------------------------------------------------------- upload
 
     /** Handles the PDFs dropped in the bulk-action area; the ticked orders are the match candidates. */
     public List<UploadResult> upload(List<MultipartFile> files, List<Long> orderIds) {
@@ -88,15 +103,14 @@ public class ContractNoteService {
             return new UploadResult(fileName, UploadResult.Outcome.DUPLICATE, duplicate.get().getId(), null, null,
                     "This PDF was already uploaded (" + duplicate.get().getFileName() + ")");
         }
-
         ContractNote note = new ContractNote();
         note.setFileName(fileName);
         note.setFileSha256(sha);
         note.setFileContent(content);
 
-        ContractNoteExtractor.Result extraction;
+        NoteFields fields;
         try {
-            extraction = extractor.extract(content, fileName);
+            fields = read(note, content, fileName);
         } catch (ExtractionException e) {
             note.setStatus(ContractNoteStatus.EXTRACTION_FAILED);
             note.setUnmatchedReason("The PDF could not be read: " + e.getMessage());
@@ -104,63 +118,213 @@ public class ContractNoteService {
             return new UploadResult(fileName, UploadResult.Outcome.EXTRACTION_FAILED, saved.getId(), null, null,
                     saved.getUnmatchedReason());
         }
-        NoteFields fields = NoteFields.from(extraction.fields());
-        note.setExtractionModel(extraction.model());
-        note.setExtractionJson(toJson(extraction.fields()));
-
         return tx.execute(status -> {
-            apply(note, fields);
             List<Order> candidates = orderIds.isEmpty() ? List.of()
                     : orders.findAllWithAssetByIdIn(orderIds).stream()
                             .filter(o -> notes.findByOrderId(o.getId()).isEmpty())
                             .toList();
-            ContractNoteMatcher.Result match = ContractNoteMatcher.match(fields, candidates, "selected");
-            return finish(note, match, fileName);
+            return finish(note, ContractNoteMatcher.match(fields, candidates, "selected"));
         });
     }
 
-    /** "Match again" from the unmatched list: tries every TRADED order without a note. */
-    public UploadResult rematch(Long id) {
+    /** Claude reads the PDF; the fields are stored on the note. Runs outside a transaction (it takes seconds). */
+    private NoteFields read(ContractNote note, byte[] content, String fileName) {
+        ContractNoteExtractor.Result extraction = extractor.extract(content, fileName);
+        NoteFields fields = NoteFields.from(extraction.fields());
+        note.setExtractionModel(extraction.model());
+        note.setExtractionJson(toJson(extraction.fields()));
+        apply(note, fields);
+        return fields;
+    }
+
+    // ---------------------------------------------------------------- re-evaluation
+
+    public record ReevaluationSummary(int evaluated, int matched, int partiallyMatched, int noMatch) {
+    }
+
+    /** Evaluates one note again against all orders it could belong to. */
+    public UploadResult reevaluate(Long id) {
         return tx.execute(status -> {
             ContractNote note = find(id);
-            requireOpen(note);
-            NoteFields fields = fieldsOf(note);
-            List<Order> candidates = fields.isin() == null ? List.of()
-                    : orders.findMatchCandidates(OrderStatus.TRADED, fields.isin());
-            return finish(note, ContractNoteMatcher.match(fields, candidates, "traded"), note.getFileName());
+            requireNotMatched(note);
+            if (note.getStatus() == ContractNoteStatus.EXTRACTION_FAILED) {
+                throw ApiException.conflict("The PDF has not been read yet – use 'Read PDF again' first");
+            }
+            return evaluate(note);
         });
     }
 
-    private UploadResult finish(ContractNote note, ContractNoteMatcher.Result match, String fileName) {
-        if (!match.matched()) {
-            note.setStatus(ContractNoteStatus.UNMATCHED);
-            note.setUnmatchedReason(match.reason());
-            notes.save(note);
-            return new UploadResult(fileName, UploadResult.Outcome.UNMATCHED, note.getId(), null, null,
-                    "Not matched: " + match.reason());
+    /** Evaluates every partially matched and unmatched note again, e.g. after orders were changed or imported. */
+    public ReevaluationSummary reevaluateOpen() {
+        return tx.execute(status -> {
+            Map<ContractNoteStatus, Integer> counts = new EnumMap<>(ContractNoteStatus.class);
+            List<ContractNote> open = new ArrayList<>(notes.findByStatusInOrderByCreatedAtDesc(REEVALUATED));
+            open.sort((a, b) -> a.getCreatedAt().compareTo(b.getCreatedAt())); // oldest note first
+            for (ContractNote note : open) {
+                ContractNote fresh = find(note.getId());
+                if (!REEVALUATED.contains(fresh.getStatus())) {
+                    continue; // changed while looping (another note took its order)
+                }
+                evaluate(fresh);
+                counts.merge(fresh.getStatus(), 1, Integer::sum);
+            }
+            ReevaluationSummary summary = new ReevaluationSummary(open.size(),
+                    counts.getOrDefault(ContractNoteStatus.MATCHED, 0),
+                    counts.getOrDefault(ContractNoteStatus.PARTIALLY_MATCHED, 0),
+                    counts.getOrDefault(ContractNoteStatus.NO_MATCH, 0));
+            if (!open.isEmpty()) {
+                log.info("Re-evaluated {} contract notes: {} matched, {} partially matched, {} no match",
+                        summary.evaluated(), summary.matched(), summary.partiallyMatched(), summary.noMatch());
+            }
+            return summary;
+        });
+    }
+
+    private UploadResult evaluate(ContractNote note) {
+        NoteFields fields = fieldsOf(note);
+        List<Order> candidates = fields.isin() == null ? List.of() : orders.findMatchCandidates(fields.isin(), note.getId());
+        return finish(note, ContractNoteMatcher.match(fields, candidates, "traded"));
+    }
+
+    private UploadResult finish(ContractNote note, ContractNoteMatcher.Result result) {
+        note.setStatus(result.status());
+        note.setUnmatchedReason(result.reason());
+        note.setMatchScore(result.checks().isEmpty() ? null : result.score());
+        note.setMatchChecks(result.checks().isEmpty() ? null : toJson(result.checks()));
+        note.setOrder(result.order());
+        note.setMatchedAt(result.status() == ContractNoteStatus.MATCHED ? Instant.now() : null);
+        notes.saveAndFlush(note);
+
+        String fileName = note.getFileName();
+        Order order = result.order();
+        return switch (result.status()) {
+            case MATCHED -> {
+                history.save(new OrderStatusHistory(order.getId(), order.getStatus(), OrderStatus.CONFIRMED,
+                        StatusTrigger.CONTRACT_NOTE, "Matched with contract note " + fileName));
+                order.setStatus(OrderStatus.CONFIRMED);
+                orders.save(order);
+                log.info("Contract note {} matched with order {}", fileName, order.getId());
+                String label = ContractNoteMatcher.label(order);
+                yield new UploadResult(fileName, UploadResult.Outcome.MATCHED, note.getId(), order.getId(), label,
+                        "Matched with " + label + ", order confirmed");
+            }
+            case PARTIALLY_MATCHED -> {
+                String label = ContractNoteMatcher.label(order);
+                yield new UploadResult(fileName, UploadResult.Outcome.PARTIALLY_MATCHED, note.getId(), order.getId(),
+                        label, "Partially matched with " + label + ": " + result.reason());
+            }
+            default -> new UploadResult(fileName, UploadResult.Outcome.NO_MATCH, note.getId(), null, null,
+                    "No match: " + result.reason());
+        };
+    }
+
+    // ---------------------------------------------------------------- update the order from the note
+
+    /**
+     * Takes price, quantity, commission and broker from a partially matched note into its order, then
+     * evaluates the note again (it becomes Matched when all checks pass).
+     */
+    public UploadResult applyToOrder(Long id) {
+        return tx.execute(status -> {
+            ContractNote note = find(id);
+            if (note.getStatus() != ContractNoteStatus.PARTIALLY_MATCHED || note.getOrder() == null) {
+                throw ApiException.conflict("Only a partially matched note can update its order");
+            }
+            Order order = note.getOrder();
+            if (!order.getStatus().isEditable()) {
+                throw ApiException.conflict("The order is " + order.getStatus().label() + " and can no longer be changed");
+            }
+            order.setPrice(note.getPrice());
+            order.setCommission(note.getCommission());
+            if (!order.isAmountOrder() && note.getQuantity().compareTo(order.getValue()) != 0) {
+                int decimals = order.getAsset().getQtyDecimals() == null ? 0 : order.getAsset().getQtyDecimals();
+                List<BigDecimal> scaled = AllocationMath.scaleQuantities(
+                        order.getAllocations().stream().map(OrderAllocation::getValue).toList(),
+                        note.getQuantity(), decimals);
+                for (int i = 0; i < scaled.size(); i++) {
+                    OrderAllocation a = order.getAllocations().get(i);
+                    a.setValue(scaled.get(i));
+                    AllocationMath.recalculatePostTrade(a, order.isSell());
+                }
+                order.setValue(note.getQuantity());
+            }
+            if (note.getBroker() != null) {
+                order.setBroker(brokers.findFirstByNameIgnoreCase(note.getBroker()).orElseGet(() -> {
+                    Broker b = new Broker();
+                    b.setName(note.getBroker());
+                    return brokers.save(b);
+                }));
+            }
+            List<BigDecimal> commissions = AllocationMath.splitCommission(order.getCommission(),
+                    order.getAllocations().stream().map(OrderAllocation::getValue).toList());
+            for (int i = 0; i < commissions.size(); i++) {
+                order.getAllocations().get(i).setCommission(commissions.get(i));
+            }
+            order.setSettlementAmount(AllocationMath.settlementAmount(order.isAmountOrder(), order.isSell(),
+                    order.getPrice(), order.getValue()));
+            order.setLocallyModified(true);
+            orders.saveAndFlush(order);
+            log.info("Order {} updated from contract note {}", order.getId(), note.getFileName());
+            return evaluate(note);
+        });
+    }
+
+    // ---------------------------------------------------------------- read again, correct, list, delete
+
+    /** Lets Claude read the stored PDF again (e.g. after a failed read), then evaluates the note. */
+    public UploadResult reread(Long id) {
+        ContractNote note = tx.execute(s -> {
+            ContractNote n = find(id);
+            requireNotMatched(n);
+            n.getFileContent(); // load the PDF while the transaction is open
+            return n;
+        });
+        try {
+            read(note, note.getFileContent(), note.getFileName());
+        } catch (ExtractionException e) {
+            return tx.execute(s -> {
+                ContractNote n = find(id);
+                n.setStatus(ContractNoteStatus.EXTRACTION_FAILED);
+                n.setUnmatchedReason("The PDF could not be read: " + e.getMessage());
+                notes.save(n);
+                return new UploadResult(n.getFileName(), UploadResult.Outcome.EXTRACTION_FAILED, n.getId(), null,
+                        null, n.getUnmatchedReason());
+            });
         }
-        Order order = match.order();
-        note.setStatus(ContractNoteStatus.MATCHED);
-        note.setUnmatchedReason(null);
-        note.setOrder(order);
-        note.setMatchedAt(Instant.now());
-        notes.save(note);
-        history.save(new OrderStatusHistory(order.getId(), order.getStatus(), OrderStatus.CONFIRMED,
-                StatusTrigger.CONTRACT_NOTE, "Matched with contract note " + fileName));
-        order.setStatus(OrderStatus.CONFIRMED);
-        orders.save(order);
-        log.info("Contract note {} matched with order {}", fileName, order.getId());
-        String label = ContractNoteMatcher.label(order);
-        return new UploadResult(fileName, UploadResult.Outcome.MATCHED, note.getId(), order.getId(), label,
-                "Matched with " + label + ", order confirmed");
+        return tx.execute(s -> {
+            ContractNote n = find(id);
+            n.setExtractionModel(note.getExtractionModel());
+            n.setExtractionJson(note.getExtractionJson());
+            apply(n, fieldsOf(note));
+            return evaluate(n);
+        });
     }
 
-    public List<ContractNoteDto> listOpen() {
-        return tx.execute(s -> notes.findByStatusInOrderByCreatedAtDesc(OPEN).stream().map(this::toDto).toList());
+    /** Corrects the values read from the PDF and evaluates the note again. */
+    public UploadResult update(Long id, UpdateNoteRequest req) {
+        return tx.execute(s -> {
+            ContractNote note = find(id);
+            requireNotMatched(note);
+            NoteFields fields = NoteFields.parse(req.instrumentName(), req.isin(), req.currency(), req.quantity(),
+                    req.price(), req.settlementAmount(), req.broker(), req.commission(), req.side(),
+                    note.getTradeDate() == null ? null : note.getTradeDate().toString(), List.of());
+            apply(note, fields);
+            return evaluate(note);
+        });
     }
 
-    public long countOpen() {
-        return notes.countByStatusIn(OPEN);
+    public List<ContractNoteDto> list(ContractNoteStatus status) {
+        List<ContractNoteStatus> statuses = status == null ? List.of(ContractNoteStatus.values()) : List.of(status);
+        return tx.execute(s -> notes.findByStatusInOrderByCreatedAtDesc(statuses).stream().map(this::toDto).toList());
+    }
+
+    public Map<String, Long> counts() {
+        Map<String, Long> counts = new java.util.LinkedHashMap<>();
+        for (ContractNoteStatus status : ContractNoteStatus.values()) {
+            counts.put(status.name(), notes.countByStatusIn(List.of(status)));
+        }
+        counts.put("open", notes.countByStatusIn(OPEN));
+        return counts;
     }
 
     public ContractNoteDto get(Long id) {
@@ -182,29 +346,26 @@ public class ContractNoteService {
     public record NamedFile(String name, byte[] content) {
     }
 
-    /** Corrects the values read from an unmatched note; matching is triggered separately ("Match again"). */
-    public ContractNoteDto update(Long id, UpdateNoteRequest req) {
-        return tx.execute(s -> {
-            ContractNote note = find(id);
-            requireOpen(note);
-            NoteFields fields = NoteFields.parse(req.instrumentName(), req.isin(), req.currency(), req.quantity(),
-                    req.price(), req.settlementAmount(), req.broker(), req.commission(), req.side(),
-                    note.getTradeDate() == null ? null : note.getTradeDate().toString(), List.of());
-            apply(note, fields);
-            note.setStatus(ContractNoteStatus.UNMATCHED);
-            note.setUnmatchedReason(fields.isComplete() ? "Values corrected, not matched yet"
-                    : "Check the values: " + String.join("; ", fields.errors()));
-            return toDto(notes.save(note));
-        });
-    }
-
     public void delete(Long id) {
         tx.executeWithoutResult(s -> {
             ContractNote note = find(id);
-            requireOpen(note);
+            requireNotMatched(note);
             notes.delete(note);
         });
     }
+
+    /** Called when an order is deleted: its note is no longer linked and will be evaluated again. */
+    public void unlinkOrder(Long orderId, String orderLabel) {
+        notes.findByOrderId(orderId).ifPresent(note -> {
+            note.setOrder(null);
+            note.setMatchedAt(null);
+            note.setStatus(ContractNoteStatus.NO_MATCH);
+            note.setUnmatchedReason("The linked order (" + orderLabel + ") was deleted");
+            notes.saveAndFlush(note);
+        });
+    }
+
+    // ---------------------------------------------------------------- helpers
 
     private void apply(ContractNote note, NoteFields f) {
         note.setInstrumentName(f.instrumentName());
@@ -236,12 +397,26 @@ public class ContractNoteService {
                 n.getInstrumentName(), n.getIsin(), n.getCurrencyCode(), n.getQuantity(), n.getPrice(),
                 n.getSettlementAmount(), n.getBroker(), n.getCommission(), n.getSide(), n.getTradeDate(),
                 n.getWarnings() == null ? List.of() : List.of(n.getWarnings().split("\n")),
+                n.getMatchScore(), ContractNoteMatcher.CHECK_COUNT, checksOf(n),
                 order == null ? null : order.getId(),
                 order == null ? null : ContractNoteMatcher.label(order),
+                order == null ? null : order.getStatus().isEditable(),
                 n.getMatchedAt(), n.getCreatedAt(), n.getExtractionModel());
     }
 
-    private void requireOpen(ContractNote note) {
+    private List<ContractNoteMatcher.Check> checksOf(ContractNote n) {
+        if (n.getMatchChecks() == null) {
+            return List.of();
+        }
+        try {
+            return json.readValue(n.getMatchChecks(), new TypeReference<List<ContractNoteMatcher.Check>>() {
+            });
+        } catch (IOException e) {
+            return List.of();
+        }
+    }
+
+    private void requireNotMatched(ContractNote note) {
         if (note.getStatus() == ContractNoteStatus.MATCHED) {
             throw ApiException.conflict("This contract note is matched; delete the order to start over");
         }
@@ -251,9 +426,9 @@ public class ContractNoteService {
         return notes.findById(id).orElseThrow(() -> ApiException.notFound("Contract note", id));
     }
 
-    private String toJson(ContractNoteExtraction e) {
+    private String toJson(Object value) {
         try {
-            return json.writeValueAsString(e);
+            return json.writeValueAsString(value);
         } catch (JsonProcessingException ex) {
             return null;
         }

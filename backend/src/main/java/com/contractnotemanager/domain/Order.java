@@ -105,9 +105,9 @@ public class Order {
     @OrderBy("id")
     private List<OrderAllocation> allocations = new ArrayList<>();
 
-    /** 1 when a contract note is matched to this order; used for the "Contract Note Match" column. */
-    @Formula("(select count(*) from contract_note cn where cn.order_id = id)")
-    private int noteMatched;
+    /** Status of the contract note linked to this order (MATCHED / PARTIALLY_MATCHED), null when none. */
+    @Formula("(select cn.status from contract_note cn where cn.order_id = id)")
+    private String noteStatus;
 
     public boolean isSell() {
         return "sell".equalsIgnoreCase(side);
