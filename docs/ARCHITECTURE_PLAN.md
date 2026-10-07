@@ -100,6 +100,35 @@ external API do not leak into the UI contract. MapStruct can be used for mapping
   and error messages – visible in the UI.
 - **Concurrency guard:** only one sync at a time (DB lock or ShedLock if multiple instances).
 
+#### 4.2.1 Source API: Sharpfin orders endpoint
+
+```
+GET https://demo2.sharpfin.com/api/orders/paginated
+    ?type=instrument&date_type=active
+    &page=1&page_size=10&no_of_elements=0
+    &sort_field=booked_date&sort_direction=asc
+    &from_date=2026-10-07&to_date=2026-10-07
+    &status=all&owner_key=all
+    &active_orders=true&include_deleted=false
+```
+
+| Parameter | Value used | How the importer will use it |
+|---|---|---|
+| `type` | `instrument` | Fixed; configurable in case other order types are needed later |
+| `date_type` | `active` | Which date `from_date`/`to_date` filter on |
+| `page`, `page_size` | `1`, `10` | Loop pages until all are read; use a larger page size (e.g. 100–500) if the API allows it |
+| `no_of_elements` | `0` | Probably a total-count hint. Send `0` on the first call and read the total from the response (to be confirmed) |
+| `sort_field`, `sort_direction` | `booked_date`, `asc` | Keep a stable sort so records don't move between pages while paging |
+| `from_date`, `to_date` | today | Default: import a configurable window (e.g. today, or last N days) and allow a manual date range from the UI |
+| `status`, `owner_key` | `all` | Import everything; filtering happens in our UI |
+| `active_orders` | `true` | Configurable |
+| `include_deleted` | `false` | Consider `true` so orders deleted at the source can be marked deleted locally |
+
+The main stored entity is therefore an **order** (instrument order). The table in 4.6 becomes
+`orders`, keyed by the Sharpfin order ID, with columns taken from the response payload.
+Still needed: a sample response (field names and types, where the total count is), and how the
+API authenticates (API key, bearer token, session cookie).
+
 ### 4.3 Handling local modifications vs. re-imports (important decision)
 
 Once users can edit imported data, a later import could overwrite their changes. Options:
@@ -248,8 +277,7 @@ as soon as the OpenAPI contract of phase 3 is agreed.
 
 ## 8. Open Questions (needed before / during Phase 1)
 
-1. **External API:** URL, documentation/OpenAPI spec, authentication method (API key, OAuth2, …),
-   rate limits, paging, sample response payload?
+1. **External API:** endpoint known (see 4.2.1). Still open: sample response payload, authentication method, rate limits.
 2. **Sync frequency:** on demand only, scheduled (how often), or both? Data volume (records per run)?
 3. **Edit vs. re-import conflict strategy:** A, B or C from section 4.3?
 4. **Database:** is PostgreSQL fine, or is there an existing company DB (SQL Server, Oracle, MySQL)?
