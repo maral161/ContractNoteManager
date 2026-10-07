@@ -111,10 +111,29 @@ terminal and to `backend/logs/contractnotemanager.log`. The import result and th
 exact orders URL that was called. The values sent as `date_type` for Booked/Traded/Settled can be changed under
 `sharpfin.date-types` in `application-local.yml` if Sharpfin uses other names.
 
-## 6. Backups
+## 6. Start over / backups
+
+**Clear everything** (orders, contract notes, import history) and start with an empty database:
 
 ```bash
-docker compose exec db pg_dump -U cnm contractnotemanager > backup-$(date +%F).sql
+./reset-db.sh          # shows what is in the database, asks you to type YES, writes a backup first
+```
+
+The tables stay, so the app can keep running – just reload the page. The backup lands in `backups/`
+(git-ignored, it contains client data).
+
+**Backup by hand:**
+
+```bash
+docker compose exec -T db pg_dump -U cnm contractnotemanager > backups/backup-$(date +%F).sql
+```
+
+**Restore a backup** (replaces everything currently in the database; stop the app first with Ctrl+C):
+
+```bash
+docker compose exec -T db psql -U cnm -d contractnotemanager -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+docker compose exec -T db psql -U cnm -d contractnotemanager < backups/before-reset-YYYYMMDD-HHMMSS.sql
+./start.sh
 ```
 
 ## Left out on purpose
