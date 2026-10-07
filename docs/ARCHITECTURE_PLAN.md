@@ -171,7 +171,21 @@ upserted by `key`, which makes it harmless to see one twice.
 | `custody.contract_notes_enabled` exists | Probably relevant for producing contract notes per custody (see open questions) |
 | The payload contains personal data (owner name/email, client names in `portfolio_name`) | GDPR: restrict access, never log full payloads, and use only anonymised samples as test data |
 
-Still needed: how the API authenticates (API key, bearer token, session cookie) and any rate limits.
+**Authentication: session based** (as in Sharpfin's own Python example, which calls
+`/api/sessions` with `Content-type: application/json`):
+
+1. At the start of each import, `SharpfinSessionClient` opens a session via `/api/sessions` with
+   `SHARPFIN_USERNAME` / `SHARPFIN_PASSWORD`, sent as a JSON body.
+2. It keeps the session cookie or token from the response, using a cookie store in the HTTP client.
+3. It sends that session on every `/api/orders/paginated` request.
+4. On HTTP 401 it logs in once more and retries; a second 401 fails the import with the message
+   "Sharpfin login failed".
+5. It ends the session after the import (if the API supports `DELETE /api/sessions`).
+
+Always over **HTTPS**. The example uses `HTTPConnection`, which is plain HTTP, but credentials
+must not travel unencrypted. The exact request (HTTP method, JSON field names, whether a cookie
+or a token comes back) is checked once against demo2 from the Mac in phase 2. It is one small
+class, so differences are cheap to adjust.
 
 ### 4.3 Local edits vs. re-imports
 
@@ -187,8 +201,25 @@ Because imports are manual, the rule can stay simple: **local edits win**.
 
 ### 4.4 Modifying data
 
-- REST endpoints with Bean Validation and business rules in the service layer, e.g.
-  allocations must add up to the order `value`, and amounts must be valid decimals.
+- **Editable fields (only these):**
+
+  | Field | Column | Input | Rule |
+  |---|---|---|---|
+  | Quantity | `value` | number | > 0, at most the asset's quantity decimals (funds: `qty_decimals`) |
+  | Price | `price` | number | > 0 |
+  | Broker | `counterpart` | text, with suggestions from brokers already used | max 200 characters |
+  | Order responsible | `owner_id` | drop-down of known owners (from imports) | must exist |
+
+  Everything else is read-only in the UI and in the API (`PATCH` rejects other fields).
+- **When edits are allowed:** while the order is `NEW`, `ON_MARKET` or `TRADED`. From
+  `CONFIRMED` on, the order is locked, because it has been checked against its contract note.
+- **Consequences of an edit:**
+  - The settlement amount is recalculated as `price × quantity`, positive for sells and
+    negative for buys, as in the Sharpfin data.
+  - The order is marked `locally_modified`, so a re-import doesn't overwrite it (4.3).
+  - **Allocations:** they must add up to the quantity, so changing the quantity shows the
+    allocations in the edit window with the difference highlighted. How they should be adjusted
+    is an open question (see section 8).
 - An `@Version` column prevents saving stale data, e.g. when the same order is edited in two
   browser tabs (HTTP 409 and a "reload" message).
 - **Delete** removes the order, its allocations and status history. A linked contract note is
@@ -229,7 +260,7 @@ Statuses only ever move **forward**. To undo a mistake, delete the order and sta
   | `new` | `NEW` |
   | `on_market` | `ON_MARKET` |
   | `traded` | `TRADED` |
-  | `finalized` | `ALLOCATED` (assumption, to be confirmed) |
+  | `finalized` | `ALLOCATED` |
 
   An import can move a status forward but never back. A Sharpfin `traded` order still needs a
   contract note to become `CONFIRMED`.
@@ -300,8 +331,9 @@ must hold:
 | Settlement amount | equal within **± 1 unit** of the currency (1 SEK, 1 EUR, …), comparing absolute values because brokers use different sign conventions |
 | Side | equal, when the note states it |
 
-The name and the broker are not used for matching. The broker is stored as the order's
-**Counterpart**.
+The name and the broker are not used for matching. **Nothing on the order is overwritten by the
+note.** The note's values (including broker, commission and settlement amount) are stored with
+the note and shown next to the order's values.
 
 - **Exactly one** candidate → match: the note is linked to the order (one note per order,
   enforced by a unique key), the order becomes `CONFIRMED`, and the **Contract Note Match**
@@ -319,8 +351,8 @@ The name and the broker are not used for matching. The broker is stored as the o
 |---|---|---|
 | GET | `/api/v1/orders?page=&size=&sort=&dateType=booked\|traded\|settled&from=&to=&asset=&portfolio=&owner=&status=&custody=&noteMatch=` | Paged, sortable, filterable order list (server-side, matching the mockup's toolbar) |
 | GET | `/api/v1/orders/{id}` | Order detail including allocations |
-| PATCH | `/api/v1/orders/{id}` | Edit order fields (requires `version`) |
-| PUT | `/api/v1/orders/{id}/allocations` | Replace allocations (validated: sum = order value) |
+| PATCH | `/api/v1/orders/{id}` (body: `quantity`, `price`, `broker`, `ownerId`, `version`) | Edit the four editable fields (4.4); 409 when the order is locked or stale |
+| GET | `/api/v1/owners` | Options for "Order responsible" |
 | POST | `/api/v1/orders` | Create an order manually ("Create new" button) |
 | DELETE | `/api/v1/orders/{id}` | Delete (a linked note becomes unmatched) |
 | POST | `/api/v1/orders/{id}/status/advance` (body: `expectedStatus`) | Blue button: move to the next status (4.4.1) |
@@ -433,7 +465,7 @@ CREATE TABLE orders (                                      -- "order" is a reser
     last_synced_at            TIMESTAMPTZ,
     raw_payload               JSONB,                       -- last imported order, used for "revert"
     version                   INTEGER NOT NULL DEFAULT 0,  -- optimistic locking for local edits
-    counterpart               VARCHAR(200)                 -- broker, filled from the matched contract note
+    counterpart               VARCHAR(200)                 -- broker, editable in the edit modal
 );
 CREATE INDEX ix_orders_booked_date ON orders(booked_date);
 CREATE INDEX ix_orders_traded_date ON orders(traded_date);
@@ -519,12 +551,12 @@ CREATE TABLE import_run (
 
 - No login. The backend listens on `127.0.0.1` only, so the app isn't reachable from other
   machines on the network.
-- The Sharpfin credentials live in an environment variable or in a git-ignored
-  `application-local.yml`, never in git.
+- The Sharpfin credentials live in the environment variables `SHARPFIN_USERNAME` /
+  `SHARPFIN_PASSWORD` (or a git-ignored `application-local.yml`), never in git. They are never
+  logged, and the connection to Sharpfin is always HTTPS.
 - The Claude API key (`ANTHROPIC_API_KEY`) is also an environment variable.
-- **Contract-note PDFs are sent to the Claude API** (Anthropic) to be read. They can contain client
-  names and account numbers. Check that this is acceptable under your company's data-protection
-  rules before using real notes.
+- **Contract-note PDFs are sent to the Claude API** (Anthropic) to be read. This has been
+  approved. Only the PDF is sent, never other order or client data.
 - The database contains personal data (client names in portfolios, owner email). It stays on the
   Mac, the database password is local-only, and full API payloads are not written to log files.
 
@@ -543,7 +575,8 @@ frontend/src/
 │   ├── AppLayout.jsx        # dark left sidebar, page header, user name top right
 │   ├── OrderToolbar.jsx     # search fields, date range, filters, buttons
 │   ├── OrdersTable.jsx      # the main table
-│   ├── OrderDrawer.jsx      # create / edit order + allocations + status history
+│   ├── EditOrderModal.jsx   # modal: quantity, price, broker, order responsible
+│   ├── OrderDetailsDrawer.jsx # read-only details, allocations, status history, contract note
 │   ├── StatusButton.jsx     # blue "next status" button
 │   ├── BulkActionBar.jsx    # appears when rows are ticked: status forward, delete, PDF drop area
 │   ├── ContractNoteDropzone.jsx # antd Upload.Dragger, multiple PDFs, per-file result
@@ -598,7 +631,7 @@ frontend/src/
 | Commission | `commission` | |
 | Curr | `currency_code` | |
 | Owner | `owner.name` | ✓ |
-| Counterpart | Broker from the matched contract note (Sharpfin `broker` if set) | |
+| Counterpart | The order's broker (editable) | |
 | Custody | `custody.name` | |
 | **Contract Note Match** *(new)* | 🟢 green lamp when a note is matched, grey otherwise. Clicking the lamp opens the note (PDF + extracted values) next to the order | ✓ |
 | ⚙ (header) | Show/hide columns; the choice is remembered in the browser | – |
@@ -612,8 +645,8 @@ mockup. The table is server-side paged with page size 10 and a size picker, as i
 |---|---|
 | Blue (phone) | **Move status forward** (4.4.1). Tooltip names the step ("Send to market", "Mark traded", "Mark allocated"); disabled for `TRADED` ("waiting for contract note"); hidden for `ALLOCATED` |
 | Green (Excel) | Left out (not needed for this app) |
-| Pencil | Opens the **order drawer**: order fields plus an allocations table (portfolio, value) with a running total that must match the order value. Save / Cancel |
-| ⋯ (more) | Show contract note, Revert to imported values, Delete, Show conflict details |
+| Pencil | Opens the **edit modal** (5.6). Disabled from `CONFIRMED` on (tooltip "locked after contract note match") |
+| ⋯ (more) | Details (allocations, status history), Show contract note, Revert to imported values, Delete, Show conflict details |
 
 **Bulk-action area** (appears above the table when rows are ticked):
 
@@ -646,6 +679,20 @@ not matched**.
 - **Correct** fields (e.g. when Claude misread a value) → **Match again**. This tries all
   `TRADED` orders without a note.
 - **Delete** the note, e.g. when the wrong file was uploaded.
+
+### 5.6 Edit modal
+
+An antd `Modal` opened by the pencil, laid out to match the screenshot you are sending:
+
+- **Header:** asset name, ISIN, side, current status.
+- **Fields:** Quantity, Price, Broker, Order responsible, with live validation. The other values
+  are shown read-only for context.
+- **Recalculated settlement amount**, shown as soon as quantity or price changes.
+- **Allocations**, shown when the quantity changes, with the difference to the new quantity.
+- **Save** / **Cancel** buttons. If someone else changed the order meanwhile (HTTP 409), a
+  "reload" message appears.
+
+The layout will be adjusted to the modal screenshot once it arrives.
 
 ---
 
@@ -700,19 +747,16 @@ Phases 2 and 3 can be built in parallel. Phase 4 can start as soon as the API in
 
 ## 8. Open Questions
 
-1. **Sharpfin login:** the credentials (username/password) are known and will be set as the
-   environment variables `SHARPFIN_USERNAME` / `SHARPFIN_PASSWORD` (never in git). Still open:
-   *how* the API takes them. HTTP Basic, or a login request that returns a session cookie or a
-   token? The browser's developer tools (Network tab, when logging in to demo2) show which.
-2. **Editable fields:** which order fields should be editable? For example price, commission,
-   fees, allocations, comment, or everything?
-3. **Write-back:** should edits or status changes ever be sent back to Sharpfin? (Not decided
+1. **Sharpfin login details:** the endpoint is `/api/sessions` (4.2.1). Two things are still to be
+   confirmed, either from the Python script or on the first test from the Mac: how the
+   username/password are sent (JSON field names, `POST`?), and whether a cookie or a token
+   comes back.
+2. **Allocations when the quantity changes:** should the app
+   (a) scale the allocations proportionally (rounded, with the remainder on the largest one),
+   (b) require editing the allocations in the modal too, or
+   (c) only warn and let the allocations differ?
+3. **Edit modal screenshot:** not received yet. Section 5.6 is a placeholder until then.
+4. **Sample PDFs:** none received yet. Two or three real (anonymised) contract notes from
+   different brokers are needed to test the extraction.
+5. **Write-back:** should edits or status changes ever be sent back to Sharpfin? (Not decided
    yet; the design keeps it possible.)
-4. **`finalized`:** does Sharpfin's `finalized` correspond to `ALLOCATED`?
-5. **After a match:** should the note's commission and settlement amount overwrite the order's
-   values, or only be shown next to them? (The plan shows them next to the order and only copies
-   the broker into *Counterpart*.)
-6. **Data protection:** is it acceptable to send contract-note PDFs (client data) to the Claude
-   API, or should the notes be anonymised or the provider checked first?
-7. **Sample PDFs:** two or three real (anonymised) contract notes from different brokers to test
-   the extraction.
