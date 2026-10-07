@@ -26,6 +26,7 @@ export default function ImportsPage() {
     },
     { title: 'Failed', dataIndex: 'failedCount', align: 'right', width: 70 },
     { title: 'Details missing', dataIndex: 'detailsMissingCount', align: 'right', width: 110 },
+    { title: 'Logged in as', dataIndex: 'sharpfinUser', ellipsis: true, width: 180 },
     { title: 'Message', dataIndex: 'errorMessage', ellipsis: true },
     {
       title: 'Sharpfin request', dataIndex: 'requestUrl', width: 110,

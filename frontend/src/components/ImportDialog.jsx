@@ -60,6 +60,7 @@ export default function ImportDialog({ open, onClose }) {
             { label: 'Conflicts (local edits kept)', children: result.conflictCount },
             { label: 'Failed', children: result.failedCount },
             { label: 'Details missing', children: result.detailsMissingCount },
+            { label: 'Logged in as', children: result.sharpfinUser ?? 'unknown (Sharpfin did not say)', span: 2 },
           ]} />
           {result.requestUrl && (
             <div style={{ marginTop: 12 }}>

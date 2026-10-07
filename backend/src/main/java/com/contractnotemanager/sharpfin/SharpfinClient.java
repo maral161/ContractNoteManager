@@ -11,6 +11,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -51,6 +53,38 @@ public class SharpfinClient {
         return session;
     }
 
+    /** Top-level field names of a JSON answer (never the values, which may hold tokens). */
+    private String fieldNames(String body) {
+        try {
+            JsonNode json = mapper.readTree(body == null || body.isBlank() ? "{}" : body);
+            List<String> names = new ArrayList<>();
+            json.fieldNames().forEachRemaining(names::add);
+            return names.isEmpty() ? "none" : String.join(", ", names);
+        } catch (IOException e) {
+            return "not JSON";
+        }
+    }
+
+    /** First text value of the given field anywhere in the JSON (depth-first), e.g. the user's name. */
+    private static String firstText(JsonNode node, String field) {
+        if (node == null) {
+            return null;
+        }
+        JsonNode direct = node.get(field);
+        if (direct != null && direct.isValueNode() && !direct.asText().isBlank()) {
+            return direct.asText();
+        }
+        for (JsonNode child : node) {
+            if (child.isContainerNode()) {
+                String found = firstText(child, field);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
     private static String shorten(String body) {
         if (body == null) {
             return "";
@@ -72,6 +106,38 @@ public class SharpfinClient {
                 .build();
         private String bearerToken;
         private String lastUrl;
+        private String sessionUser;
+
+        @Override
+        public String sessionUser() {
+            return sessionUser;
+        }
+
+        /** Asks Sharpfin who this session belongs to (GET /api/sessions), only for display and the log. */
+        private String whoAmI(String sessionPath) {
+            try {
+                HttpResponse<String> response = http.send(baseRequest(sessionPath).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() >= 300) {
+                    log.info("Sharpfin GET {} → HTTP {} (session user unknown)", sessionPath, response.statusCode());
+                    return null;
+                }
+                JsonNode json = parse(response.body());
+                String name = firstText(json, "name");
+                String email = firstText(json, "email");
+                String user = name == null && email == null ? null
+                        : (name == null ? "" : name) + (email == null ? "" : (name == null ? "" : " ") + "<" + email + ">");
+                log.info("Sharpfin session user: {} (answer fields: {})", user == null ? "unknown" : user,
+                        fieldNames(response.body()));
+                return user;
+            } catch (IOException | RuntimeException e) {
+                log.info("Could not read the Sharpfin session user: {}", e.getMessage());
+                return null;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
 
         @Override
         public String lastRequestUrl() {
@@ -114,7 +180,12 @@ public class SharpfinClient {
                 }
                 bearerToken = token.asText();
             }
-            log.info("Logged in to Sharpfin at {}", props.baseUrl());
+            List<String> cookies = response.headers().allValues("set-cookie").stream()
+                    .map(c -> c.split("=", 2)[0].trim())
+                    .toList();
+            log.info("Logged in to Sharpfin at {} (cookies set: {}, answer fields: {})", props.baseUrl(),
+                    cookies.isEmpty() ? "none" : String.join(", ", cookies), fieldNames(response.body()));
+            sessionUser = whoAmI(login.path());
         }
 
         @Override

@@ -119,6 +119,8 @@ class ImportApiTest extends IntegrationTest {
         WIREMOCK.verify(paged.withQueryParam("date_type", com.github.tomakehurst.wiremock.client.WireMock.equalTo("settled"))
                 .withQueryParam("from_date", com.github.tomakehurst.wiremock.client.WireMock.equalTo("2026-10-01")));
         assertThat(getJson("/api/v1/imports").get(0).path("dateType").asText()).isEqualTo("SETTLED");
+        assertThat(getJson("/api/v1/imports").get(0).path("sharpfinUser").asText())
+                .isEqualTo("Test User <test@example.com>");
         assertThat(getJson("/api/v1/imports").get(0).path("requestUrl").asText())
                 .contains("/api/orders/paginated?type=instrument&date_type=settled")
                 .contains("from_date=2026-10-01&to_date=2026-10-07");

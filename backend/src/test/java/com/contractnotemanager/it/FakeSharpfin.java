@@ -84,6 +84,9 @@ public class FakeSharpfin {
         server.stubFor(post(urlPathEqualTo("/api/sessions")).atPriority(10)
                 .willReturn(aResponse().withStatus(401)));
         server.stubFor(delete(urlPathEqualTo("/api/sessions")).willReturn(aResponse().withStatus(204)));
+        server.stubFor(get(urlPathEqualTo("/api/sessions")).withCookie("sid", equalTo("abc123"))
+                .willReturn(aResponse().withHeader("Content-Type", "application/json")
+                        .withBody("{\"key\":\"s1\",\"user\":{\"name\":\"Test User\",\"email\":\"test@example.com\"}}")));
         // without the session cookie every data call is rejected
         server.stubFor(get(urlPathMatching("/api/orders.*")).atPriority(10).willReturn(aResponse().withStatus(401)));
 

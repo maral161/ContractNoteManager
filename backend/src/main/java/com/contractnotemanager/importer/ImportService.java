@@ -72,6 +72,7 @@ public class ImportService {
 
         Set<String> received = new HashSet<>();
         try (SharpfinSession session = sharpfin.openSession()) {
+            run.setSharpfinUser(session.sessionUser());
             int page = 1;
             int pages;
             do {

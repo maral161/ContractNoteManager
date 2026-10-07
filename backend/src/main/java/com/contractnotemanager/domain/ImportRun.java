@@ -39,4 +39,6 @@ public class ImportRun {
     private String errorMessage;
     /** The orders-list URL called in Sharpfin (first page), shown for debugging. */
     private String requestUrl;
+    /** The Sharpfin user the import ran as. */
+    private String sharpfinUser;
 }

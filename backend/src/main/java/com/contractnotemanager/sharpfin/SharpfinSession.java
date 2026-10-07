@@ -13,6 +13,9 @@ public interface SharpfinSession extends AutoCloseable {
     /** {@code /api/orders/{key}?calculate_allocations=true} – the order with allocation figures. */
     JsonNode orderDetails(String orderKey);
 
+    /** Name/e-mail of the Sharpfin user this session belongs to, if Sharpfin tells (for display only). */
+    String sessionUser();
+
     /** Full URL of the last GET request (for the import log; contains no credentials). */
     String lastRequestUrl();
 
