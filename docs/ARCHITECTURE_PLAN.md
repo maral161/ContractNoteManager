@@ -203,23 +203,25 @@ Because imports are manual, the rule can stay simple: **local edits win**.
 
 - **Editable fields (only these):**
 
-  | Field | Column | Input | Rule |
-  |---|---|---|---|
-  | Quantity | `value` | number | > 0, at most the asset's quantity decimals (funds: `qty_decimals`) |
-  | Price | `price` | number | > 0 |
-  | Broker | `counterpart` | text, with suggestions from brokers already used | max 200 characters |
-  | Order responsible | `owner_id` | drop-down of known owners (from imports) | must exist |
+  | Field | Where in the modal | Rule |
+  |---|---|---|
+  | Quantity | **per portfolio**, in the allocation table's *New Quantity* column. The order quantity is their total | each ≥ 0, at most the asset's quantity decimals (funds: `qty_decimals`); total > 0 |
+  | Price | *Price* field | > 0 |
+  | Broker | *Counterpart* drop-down (with suggestions from brokers already used; new names can be typed) | max 200 characters |
+  | Order responsible | *Owner* drop-down (known owners from imports) | must exist |
 
-  Everything else is read-only in the UI and in the API (`PATCH` rejects other fields).
+  Everything else (amount, status, ISIN, currency, booked, valid to, custody, source, comment,
+  commission) is read-only, both in the UI and in the API (`PATCH` rejects other fields).
+- **Allocations:** the quantity is changed by editing the allocations, so the order quantity
+  always equals their total and the two can never disagree. Portfolios can be added
+  (*Type to start searching…* + **Add**) or removed (bin icon). The *Quantity rounding*
+  buttons (None / 1 / 10 / 100) round the new quantities to that step.
 - **When edits are allowed:** while the order is `NEW`, `ON_MARKET` or `TRADED`. From
   `CONFIRMED` on, the order is locked, because it has been checked against its contract note.
 - **Consequences of an edit:**
-  - The settlement amount is recalculated as `price × quantity`, positive for sells and
-    negative for buys, as in the Sharpfin data.
+  - The order *Amount* (settlement amount) is recalculated as `price × quantity`, positive for
+    sells and negative for buys, as in the Sharpfin data.
   - The order is marked `locally_modified`, so a re-import doesn't overwrite it (4.3).
-  - **Allocations:** they must add up to the quantity, so changing the quantity shows the
-    allocations in the edit window with the difference highlighted. How they should be adjusted
-    is an open question (see section 8).
 - An `@Version` column prevents saving stale data, e.g. when the same order is edited in two
   browser tabs (HTTP 409 and a "reload" message).
 - **Delete** removes the order, its allocations and status history. A linked contract note is
@@ -306,16 +308,48 @@ per file.
 
   Numbers are returned as strings and parsed to `BigDecimal` in Java, so no rounding happens
   on the way.
-- **Validation after extraction:** ISIN format and check digit, a 3-letter currency, numbers
-  that parse, and `quantity × price` ≈ settlement amount ± commission. If any check fails, the
-  note goes to the unmatched list with the reason, and the values can be corrected by hand.
+- **Validation after extraction:**
+  - **Blocking** (the note goes to the unmatched list with the reason, and the values can be
+    corrected by hand): all 8 fields present, ISIN format and check digit, a 3-letter currency,
+    numbers that parse.
+  - **Warning only:** `quantity × price` differs from the settlement amount by more than
+    ± commission + 1. In the samples the settlement amount is the gross trade value, with
+    commission shown separately.
 - The raw JSON answer and the model ID are stored with the note for traceability.
 - **Configuration:** `ANTHROPIC_API_KEY` as an environment variable (never in git). Timeouts
   and SDK retries are on. Refusals fall back to another model via the API's server-side
   fallback option.
 - **Cost:** roughly a few cents per 1–2 page PDF (input $4 / output $20 per million tokens).
 - **Testability:** the extractor sits behind an interface. Tests use a fake extractor with
-  fixed results. A small set of real, anonymised PDFs checks the extraction quality by hand.
+  fixed results. The sample PDFs below are checked against the real API in an opt-in test
+  (`-Dclaude.it=true`), which runs only when an API key is set.
+
+**What the sample notes show** (`docs/samples/contract-notes/`)
+
+| Sample | Language | Labels used | Traps for the extraction |
+|---|---|---|---|
+| `abn-amro_abb.pdf` | English | Security Name, ISIN, Currency, Price, Settlement Amount, Quantity, Commission, Broker Name | Space as thousands separator (`811 809.00`) |
+| `swedbank_barclays.pdf` | **Swedish** | Värdepapper, Valuta, Pris, Antal, Avräkningsbelopp, Courtage, **Mäklare** | Broker is *Mäklare* (Swedbank), **not** *Motpart* (Norion Wealth Management, which is the client side). The security name ("Barclays Bank") differs from Sharpfin's ("Barclays PLC") |
+| `ubs_apple.pdf` | **German** | Wertpapier, Währung, Kurs, Anzahl, Abrechnungsbetrag, Courtage, **Geschäftsvermittler** | Broker is *Geschäftsvermittler* (UBS), **not** *Gegenpartei* (Consensus Asset Management AB) |
+
+None of the notes states buy/sell or a trade date, so both stay optional and are not needed for
+matching. The instruction to Claude therefore says:
+
+- Labels may be in any language.
+- The broker is the executing broker or bank (Broker / Mäklare / Geschäftsvermittler), never the
+  counterparty/client (Motpart / Gegenpartei).
+- Numbers must be returned as plain decimals, without thousands separators, with `.` as the
+  decimal mark.
+- The settlement amount must be returned as printed, without a sign.
+
+**Expected results against the orders of 2026-10-07** (an acceptance test):
+
+| Note | Order | Checks | Result |
+|---|---|---|---|
+| ABN Amro, ABB | Sell ABB 1,864 @ 435.52 | ISIN ✓ currency ✓ quantity ✓ price ✓, settlement 811,809.00 vs 811,809.28 (diff 0.28 ≤ 1) ✓ | **Matched** → Confirmed, green lamp |
+| UBS, Apple | Sell Apple 473 @ 219.65 | all ✓, settlement 103,894.00 vs 103,894.45 (diff 0.45) ✓ | **Matched** |
+| Swedbank, Barclays | Buy Barclays 98 @ 123.57 | price **123.47 ≠ 123.57**, settlement 12,100.10 vs 12,109.86 (diff **9.76**) | **Unmatched**: "price differs (123.47 vs 123.57); settlement amount differs by 9.76 GBP" |
+
 
 **Matching rules**
 
@@ -351,7 +385,8 @@ the note and shown next to the order's values.
 |---|---|---|
 | GET | `/api/v1/orders?page=&size=&sort=&dateType=booked\|traded\|settled&from=&to=&asset=&portfolio=&owner=&status=&custody=&noteMatch=` | Paged, sortable, filterable order list (server-side, matching the mockup's toolbar) |
 | GET | `/api/v1/orders/{id}` | Order detail including allocations |
-| PATCH | `/api/v1/orders/{id}` (body: `quantity`, `price`, `broker`, `ownerId`, `version`) | Edit the four editable fields (4.4); 409 when the order is locked or stale |
+| PATCH | `/api/v1/orders/{id}` (body: `price`, `broker`, `ownerId`, `allocations[{portfolioId, quantity}]`, `version`) | Save from the edit modal (4.4). The order quantity = total of the allocations. 409 when the order is locked or stale |
+| GET | `/api/v1/portfolios?q=` | Portfolio search for *Add* in the allocation table |
 | GET | `/api/v1/owners` | Options for "Order responsible" |
 | POST | `/api/v1/orders` | Create an order manually ("Create new" button) |
 | DELETE | `/api/v1/orders/{id}` | Delete (a linked note becomes unmatched) |
@@ -575,7 +610,7 @@ frontend/src/
 │   ├── AppLayout.jsx        # dark left sidebar, page header, user name top right
 │   ├── OrderToolbar.jsx     # search fields, date range, filters, buttons
 │   ├── OrdersTable.jsx      # the main table
-│   ├── EditOrderModal.jsx   # modal: quantity, price, broker, order responsible
+│   ├── EditOrderModal.jsx   # modal as in the screenshot: price, counterpart, owner, allocations
 │   ├── OrderDetailsDrawer.jsx # read-only details, allocations, status history, contract note
 │   ├── StatusButton.jsx     # blue "next status" button
 │   ├── BulkActionBar.jsx    # appears when rows are ticked: status forward, delete, PDF drop area
@@ -680,23 +715,48 @@ not matched**.
   `TRADED` orders without a note.
 - **Delete** the note, e.g. when the wrong file was uploaded.
 
-### 5.6 Edit modal
+### 5.6 Edit modal (from the screenshot "Sell ABB")
 
-An antd `Modal` opened by the pencil, laid out to match the screenshot you are sending:
+An antd `Modal` (about 1080 px wide) opened by the pencil:
 
-- **Header:** asset name, ISIN, side, current status.
-- **Fields:** Quantity, Price, Broker, Order responsible, with live validation. The other values
-  are shown read-only for context.
-- **Recalculated settlement amount**, shown as soon as quantity or price changes.
-- **Allocations**, shown when the quantity changes, with the difference to the new quantity.
-- **Save** / **Cancel** buttons. If someone else changed the order meanwhile (HTTP 409), a
-  "reload" message appears.
+```
+┌ Order ───────────────────────────────────────────────────────────────── (×) ┐
+│ Sell ABB                                                    dark header      │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Amount       Status   ISIN           Currency   Booked       Valid to        │
+│ 811,809.28   New      CH0012221716   SEK        2026-10-07   2026-10-07      │
+│ Counterpart [ABN Amro ▾]  Custody [Nordnet]  Source [Rebalance]  Comment [ ] │
+│ Price [435.52]  Commission [1,200]           Owner [Betty G… ▾]  Rounding    │
+│                                                        [None|1|10|100]       │
+│ Portfolio | New Quantity | Order Quantity | Order Weight | Alloc post/pre…   │
+│ Kattegatt AB … | [1,761] | 1,761.00 | …                              [🗑]   │
+│ Ohlsson Anders …| [103]  | 103.00   | …                              [🗑]   │
+│ [Type to start searching…] [   ] (+ Add)                                     │
+│ Total           1,864.00   1,864.00                                          │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ (Close)                                       (Save and close)  (Save)       │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
 
-The layout will be adjusted to the modal screenshot once it arrives.
+| Screenshot element | In this app |
+|---|---|
+| Header "Order / Sell ABB" | Side + asset name |
+| Amount, Status, ISIN, Currency, Booked | Read-only. Amount updates live when price or quantities change |
+| Valid to, Custody, Source, Comment, Commission | Shown, but **read-only** (greyed like *Custody*), since they aren't on the editable list |
+| **Counterpart** | Editable (= broker). Select with search, clear button and free text |
+| **Price** | Editable, number input with thousands separators |
+| **Owner** | Editable (= order responsible). Select of known owners |
+| **Quantity rounding** None / 1 / 10 / 100 | Rounds the *New Quantity* values to that step |
+| Allocation table: Portfolio, **New Quantity** (editable), Order Quantity (as imported/last saved), bin icon | As in the screenshot |
+| *Type to start searching…* + **Add** | Adds a portfolio (search over known portfolios) |
+| Order Weight, Alloc post-/pre-trade, % post-/pre-trade | **Not available**: they need portfolio holdings, which the orders API doesn't provide. Columns hidden (see open questions) |
+| Commission per portfolio | The order commission split by quantity (1,761/1,864 × 1,200 = 1,134), as in the screenshot. Read-only |
+| Total row | Sum of New Quantity and Order Quantity |
+| Close / **Save and close** / **Save** | Save keeps the modal open; Save and close closes it. Close with unsaved changes asks for confirmation. HTTP 409 → "order changed or locked, reload" |
 
 ---
 
-## 6.---
+## 6. Repository---
 
 ## 6. Repository Layout & Running on the Mac
 
@@ -704,7 +764,7 @@ The layout will be adjusted to the modal screenshot once it arrives.
 ContractNoteManager/
 ├── backend/                 # Spring Boot (Maven wrapper ./mvnw)
 ├── frontend/                # React + Vite (JavaScript)
-├── docs/                    # This plan, notes, (later) mockups
+├── docs/                    # This plan, mockups, samples/contract-notes/*.pdf
 ├── docker-compose.yml       # PostgreSQL only
 └── README.md                # Setup and run instructions
 ```
@@ -751,12 +811,9 @@ Phases 2 and 3 can be built in parallel. Phase 4 can start as soon as the API in
    confirmed, either from the Python script or on the first test from the Mac: how the
    username/password are sent (JSON field names, `POST`?), and whether a cookie or a token
    comes back.
-2. **Allocations when the quantity changes:** should the app
-   (a) scale the allocations proportionally (rounded, with the remainder on the largest one),
-   (b) require editing the allocations in the modal too, or
-   (c) only warn and let the allocations differ?
-3. **Edit modal screenshot:** not received yet. Section 5.6 is a placeholder until then.
-4. **Sample PDFs:** none received yet. Two or three real (anonymised) contract notes from
-   different brokers are needed to test the extraction.
-5. **Write-back:** should edits or status changes ever be sent back to Sharpfin? (Not decided
+2. **Commission:** it is not on the editable list, but the modal shows it as an input
+   (1,200 in the screenshot), and every sample note has a commission. Should it be editable too?
+3. **Order Weight / Alloc pre- and post-trade:** these need portfolio holdings. Is there a
+   Sharpfin API for them, or can the columns stay hidden?
+4. **Write-back:** should edits or status changes ever be sent back to Sharpfin? (Not decided
    yet; the design keeps it possible.)
