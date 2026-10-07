@@ -2,103 +2,114 @@
 
 ## 1. Goals
 
-1. **Ingest** data from an external API.
-2. **Persist** it in a relational database.
-3. **Modify** the stored data (create / update / delete, with validation).
-4. **Display and edit** everything in a web UI built from a supplied screen mockup.
+1. **Import** instrument orders from the Sharpfin orders API when the user clicks a button.
+2. **Persist** them in a relational database.
+3. **Modify** the stored orders (edit, delete, revert to the imported values, with validation).
+4. **Display and edit** everything in a web UI.
 
-Constraints: Java backend, JavaScript frontend, relational database.
+**Context and decisions so far**
+
+| Topic | Decision |
+|---|---|
+| Languages | Java backend, **plain JavaScript** frontend |
+| Database | **PostgreSQL** |
+| Users | **One user**, no login |
+| Where it runs | **Locally on a Mac** |
+| Import trigger | **Manual only**: one run per click of an "Import" button |
+| Screen mockup | Not decided yet. A sensible default UI is built first and can be restyled to a mockup later |
 
 ---
 
-## 2. Proposed Technology Stack
+## 2. Technology Stack
 
 | Layer | Choice | Why |
 |---|---|---|
-| Backend language | **Java 21 (LTS)** | Current LTS, records, pattern matching, virtual threads |
-| Backend framework | **Spring Boot 3.x** | De-facto standard; REST, scheduling, validation, security, JPA out of the box |
-| External API client | Spring `RestClient` (+ Resilience4j retry / circuit breaker) | Simple synchronous client with robust failure handling |
-| Persistence | Spring Data JPA (Hibernate) | Little boilerplate for CRUD; native SQL possible where needed |
-| Database | **PostgreSQL 16** | Robust, free, strong JSON + constraint support. (MySQL/MariaDB or SQL Server are drop-in alternatives) |
-| Schema migrations | **Flyway** | Versioned, reviewable SQL migrations |
-| API documentation | springdoc-openapi (Swagger UI) | Auto-generated OpenAPI spec; frontend client can be generated from it |
-| Frontend | **React 18 + TypeScript + Vite** | Large ecosystem, fast dev loop; TypeScript is JavaScript with type safety (plain JS also possible) |
-| UI components | MUI or Ant Design (chosen once the mockup is known) | Ready-made data grids, forms, dialogs |
-| Data fetching | TanStack Query + generated OpenAPI client | Caching, refetching, optimistic updates |
-| Forms | React Hook Form + Zod | Client-side validation mirroring the backend |
-| Build | Maven (backend), npm (frontend) | |
-| Testing | JUnit 5, Mockito, Testcontainers (real Postgres), WireMock (fake external API); Vitest + React Testing Library, Playwright (E2E) | |
-| Packaging / run | Docker + Docker Compose | One command starts DB, backend and frontend |
-| CI | GitHub Actions | Build, test, lint on every push / PR |
+| Backend language | **Java 21 (LTS)** | Current long-term-support Java |
+| Backend framework | **Spring Boot 3.x** | REST, validation, JPA and configuration out of the box |
+| External API client | Spring `RestClient` with timeouts and a simple retry | Enough for a manual, on-click import |
+| Persistence | Spring Data JPA (Hibernate) | Little boilerplate for CRUD |
+| Database | **PostgreSQL 16** | Free, robust, good `NUMERIC` and `JSONB` support |
+| Schema migrations | **Flyway** | Versioned SQL scripts, applied automatically at startup |
+| API documentation | springdoc-openapi (Swagger UI) | Browse and try the backend API at `/swagger-ui.html` |
+| Frontend | **React 18 + Vite, plain JavaScript** (`.jsx`) | Large ecosystem, fast dev loop, no TypeScript |
+| UI components | **MUI** (Material UI) incl. the free MUI X DataGrid | Ready-made table with sorting/filtering, forms, dialogs |
+| Data fetching | TanStack Query + a small `fetch` wrapper | Caching and automatic refresh after edits |
+| Forms | React Hook Form | Simple form state and validation |
+| Build | Maven (backend, also builds the frontend into the JAR), npm (frontend) | |
+| Testing | JUnit 5, Testcontainers (real Postgres), WireMock (fake Sharpfin API); Vitest + React Testing Library | |
+
+**Left out on purpose** for a single-user local app: scheduled imports, login/roles, multi-instance
+locking, Kubernetes/cloud deployment, Nginx. Any of these can be added later without redesign.
 
 ---
 
 ## 3. High-Level Architecture
 
 ```
-                 ┌─────────────────────────┐
-                 │   External Data API     │
-                 └────────────┬────────────┘
-                              │ HTTPS (pull: scheduled or on demand)
-┌─────────────────────────────▼──────────────────────────────────┐
-│                  Backend – Spring Boot (Java)                  │
-│                                                                │
-│  ┌──────────────┐   ┌────────────────┐   ┌──────────────────┐  │
-│  │ Integration  │──▶│ Import/Sync    │──▶│ Domain Services  │  │
-│  │ (API client, │   │ Service (map,  │   │ (business rules, │  │
-│  │  DTOs, retry)│   │ upsert, log)   │   │  validation)     │  │
-│  └──────────────┘   └────────────────┘   └────────┬─────────┘  │
-│                                                   │            │
-│  ┌──────────────────────┐              ┌──────────▼─────────┐  │
-│  │ REST Controllers     │◀────────────▶│ Repositories (JPA) │  │
-│  │ /api/v1/...  (JSON)  │              └──────────┬─────────┘  │
-│  └──────────▲───────────┘                         │            │
-└─────────────┼─────────────────────────────────────┼────────────┘
-              │ JSON over HTTP                      │ JDBC
-┌─────────────┴───────────┐              ┌──────────▼─────────┐
-│ Frontend – React (JS/TS)│              │   PostgreSQL       │
-│ List / Detail / Edit    │              │   (Flyway-managed) │
-│ views from the mockup   │              └────────────────────┘
-└─────────────────────────┘
+                 ┌─────────────────────────────┐
+                 │  Sharpfin API (demo2…)      │
+                 └──────────────┬──────────────┘
+                                │ HTTPS, only when "Import" is clicked
+┌───────────────────────────────▼──────────────────────────────────┐
+│           Backend – Spring Boot (Java), localhost:8080           │
+│                                                                  │
+│  ┌──────────────┐   ┌────────────────┐   ┌────────────────────┐  │
+│  │ Integration  │──▶│ Import service │──▶│ Order service      │  │
+│  │ (API client, │   │ (paging, map,  │   │ (validation, edit, │  │
+│  │  DTOs)       │   │ upsert, log)   │   │  revert)           │  │
+│  └──────────────┘   └────────────────┘   └─────────┬──────────┘  │
+│                                                    │             │
+│  ┌──────────────────────┐               ┌──────────▼──────────┐  │
+│  │ REST controllers     │◀─────────────▶│ Repositories (JPA)  │  │
+│  │ /api/v1/...  (JSON)  │               └──────────┬──────────┘  │
+│  │ + serves the built UI│                          │             │
+│  └──────────▲───────────┘                          │             │
+└─────────────┼──────────────────────────────────────┼─────────────┘
+              │ JSON over HTTP                       │ JDBC
+┌─────────────┴────────────┐              ┌──────────▼──────────┐
+│ Browser – React (JS)     │              │ PostgreSQL 16       │
+│ Orders list, edit, import│              │ (Docker on the Mac) │
+└──────────────────────────┘              └─────────────────────┘
 ```
 
-**Key principle:** the UI never talks to the external API directly. The backend is the single
-owner of the data; the external API is only a *source* for imports.
+The UI never calls Sharpfin directly. The backend owns the data; Sharpfin is only the source
+for imports.
 
 ---
 
 ## 4. Backend Design
 
-### 4.1 Module / package structure
+### 4.1 Package structure
 
 ```
 backend/src/main/java/com/contractnotemanager/
-├── config/          # Spring config, CORS, security, scheduling, OpenAPI
-├── integration/     # External API client, its DTOs, mapper to domain
-├── sync/            # Import orchestration, scheduling, sync-run logging
+├── config/          # Spring config, Sharpfin connection settings
+├── integration/     # Sharpfin API client, its DTOs, mapping to entities
+├── importer/        # Import orchestration (paging, upsert) and import-run log
 ├── domain/          # JPA entities + enums
 ├── repository/      # Spring Data repositories
 ├── service/         # Business logic, validation, transactions
-├── web/             # REST controllers, request/response DTOs, mappers
-│   └── error/       # Global exception handler (RFC 7807 problem+json)
+├── web/             # REST controllers, request/response DTOs
+│   └── error/       # Global exception handler (problem+json)
 └── Application.java
 ```
 
-DTOs are kept separate per layer (external DTO ≠ entity ≠ REST DTO), so changes in the
-external API do not leak into the UI contract. MapStruct can be used for mapping.
+Sharpfin DTOs, database entities and REST DTOs are separate classes, so a change in the Sharpfin
+API does not leak into the UI.
 
-### 4.2 Data ingestion (API → DB)
+### 4.2 Import (API → DB)
 
-- **Trigger options:** scheduled (`@Scheduled`, e.g. every N minutes / nightly, configurable) **and**
-  manual (`POST /api/v1/sync` button in the UI).
-- **Flow:** fetch (with paging) → validate → map → **upsert** by the external ID → record result.
-- **Idempotent:** each record keeps `external_id`; re-imports update instead of duplicating.
-- **Incremental sync** if the API supports it (`modifiedSince`, cursor, ETag); otherwise full sync.
-- **Resilience:** timeouts, retries with back-off, circuit breaker; a failed run never corrupts data
-  (one transaction per page/batch).
-- **Sync log:** a `sync_run` table stores start/end, status, counts (created/updated/skipped/failed)
-  and error messages – visible in the UI.
-- **Concurrency guard:** only one sync at a time (DB lock or ShedLock if multiple instances).
+- **Trigger:** only manual. The UI's "Import" button opens a dialog with a date range
+  (default: today) and calls `POST /api/v1/imports`.
+- **Flow:** fetch all pages → map → **upsert** by Sharpfin `key` → write an `import_run` record.
+- **Idempotent:** re-importing the same day updates orders instead of duplicating them.
+- **Safe:** timeouts and a short retry on network errors. Each page is saved in its own
+  transaction, and the run is marked `FAILED` or `PARTIAL` with the error message.
+- **One at a time:** a second click while an import runs is rejected (HTTP 409). The button
+  is disabled in the UI while an import runs.
+- **Feedback:** for the expected volumes (tens to hundreds of orders) the request waits until the
+  import finishes and returns the counts (created / updated / skipped / conflicts). Very large
+  imports could later run in the background with a progress indicator.
 
 #### 4.2.1 Source API: Sharpfin orders endpoint
 
@@ -119,7 +130,7 @@ GET https://demo2.sharpfin.com/api/orders/paginated
 | `page`, `page_size` | `1`, `10` | Loop pages until all are read; use a larger page size (e.g. 100–500) if the API allows it |
 | `no_of_elements` | `0` | Sent as `0`; the response returns the real total |
 | `sort_field`, `sort_direction` | `booked_date`, `asc` | Keep a stable sort so records don't move between pages while paging |
-| `from_date`, `to_date` | today | Default: import a configurable window (e.g. today, or last N days) and allow a manual date range from the UI |
+| `from_date`, `to_date` | today | Chosen in the import dialog (defaults to today) |
 | `status`, `owner_key` | `all` | Import everything; filtering happens in our UI |
 | `active_orders` | `true` | Configurable |
 | `include_deleted` | `false` | Consider `true` so orders deleted at the source can be marked deleted locally |
@@ -156,30 +167,27 @@ upserted by `key`, which makes it harmless to see one twice.
 
 Still needed: how the API authenticates (API key, bearer token, session cookie) and any rate limits.
 
-### 4.3 Handling local modifications vs. re-imports (important decision)
+### 4.3 Local edits vs. re-imports
 
-Once users can edit imported data, a later import could overwrite their changes. Options:
+Because imports are manual, the rule can stay simple: **local edits win**.
 
-| Strategy | Behaviour | Recommended when |
-|---|---|---|
-| **A. Local edits win** | Record gets `locally_modified = true`; sync skips (or only flags) these records | Edits are corrections the API will never reflect |
-| B. API wins | Sync always overwrites | DB is merely a cache of the API |
-| C. Field-level overrides | Store API value and user override separately; UI shows the effective value and the original | Full traceability is needed |
+- Editing an order sets `locally_modified = true`.
+- A later import does **not** overwrite a locally modified order. If Sharpfin's `version` has
+  gone up since, the order is flagged with `sync_conflict = true` and shown with a badge, so
+  the change can be checked.
+- **"Revert"** on an order discards the local edits and restores the last imported values.
 
-**Default proposal: A**, plus a "conflict" flag when the API value changed after a local edit,
-so the user can review it in the UI. To be confirmed.
+### 4.4 Modifying data
 
-### 4.4 Data modification
+- REST endpoints with Bean Validation and business rules in the service layer, e.g.
+  allocations must add up to the order `value`, and amounts must be valid decimals.
+- An `@Version` column prevents saving stale data, e.g. when the same order is edited in two
+  browser tabs (HTTP 409 and a "reload" message).
+- **Delete** is a soft delete (`deleted_at`), so a re-import does not bring the order back.
+  Deleted orders can be shown and restored with a filter.
+- Optional later: a change history per order (Hibernate Envers).
 
-- REST CRUD endpoints with Bean Validation (`@Valid`, `@NotNull`, …) and domain rules in services.
-- **Optimistic locking** (`@Version` column) so two users can't silently overwrite each other
-  (HTTP 409 on conflict).
-- **Audit fields** on every table: `created_at`, `created_by`, `updated_at`, `updated_by`.
-  Optional full change history via Hibernate Envers.
-- Soft delete (`deleted_at`) for imported records, so a re-import does not resurrect deleted rows
-  unintentionally.
-
-### 4.5 REST API (draft)
+### 4.5 REST API
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -190,17 +198,15 @@ so the user can review it in the UI. To be confirmed.
 | DELETE | `/api/v1/orders/{id}` | Soft delete |
 | POST | `/api/v1/orders/{id}/revert` | Discard local edits and restore the last imported values |
 | GET | `/api/v1/custodies`, `/api/v1/assets`, `/api/v1/portfolios` | Reference data for filters and drop-downs |
-| POST | `/api/v1/sync` (body: `fromDate`, `toDate`) | Trigger import now |
-| GET | `/api/v1/sync/runs` | Import history and status |
-| GET | `/actuator/health` | Health check |
+| POST | `/api/v1/imports` (body: `fromDate`, `toDate`) | Run an import now |
+| GET | `/api/v1/imports` | Import history |
 
-Errors are returned as `application/problem+json`. The OpenAPI spec is published at
-`/v3/api-docs` and used to generate the TypeScript client.
+Errors are returned as `application/problem+json`.
 
 ### 4.6 Data model
 
-Derived from the sample response. Every table also gets the audit columns `created_at`,
-`updated_at`, `created_by`, `updated_by` (left out below for brevity).
+Derived from the sample response. Every table also gets `created_at` and `updated_at` columns
+(left out below for brevity). There is one user, so no `created_by`/`updated_by`.
 
 ```
 custody 1──* orders *──1 asset
@@ -305,7 +311,6 @@ CREATE TABLE sync_run (
     started_at     TIMESTAMPTZ NOT NULL,
     finished_at    TIMESTAMPTZ,
     status         VARCHAR(20) NOT NULL,       -- RUNNING | SUCCESS | PARTIAL | FAILED
-    trigger_type   VARCHAR(20) NOT NULL,       -- SCHEDULED | MANUAL
     from_date      DATE,
     to_date        DATE,
     expected_count INTEGER,                    -- no_of_elements reported by the API
@@ -318,7 +323,7 @@ CREATE TABLE sync_run (
 );
 ```
 
-**Import rule per order** (strategy A from 4.3):
+**Import rule per order** (see 4.3):
 
 | Order state in DB | Remote `version` vs stored `sf_version` | Action |
 |---|---|---|
@@ -327,57 +332,74 @@ CREATE TABLE sync_run (
 | present, locally modified | higher | keep local values, set `sync_conflict = true`, store new remote payload for comparison |
 | present | same or lower | skip |
 
-### 4.7 Security
+### 4.7 Security (local single-user app)
 
-- Phase 1: simple login (Spring Security, form/session or HTTP Basic) or none for local use.
-- Later: OAuth2/OIDC (Keycloak, Azure AD, Google, …) with roles, e.g. `VIEWER` / `EDITOR` / `ADMIN`.
-- External API credentials only via environment variables / secret store – never in git.
-- CORS restricted to the frontend origin; HTTPS in production.
+- No login. The backend listens on `127.0.0.1` only, so the app isn't reachable from other
+  machines on the network.
+- The Sharpfin credentials live in an environment variable or in a git-ignored
+  `application-local.yml`, never in git.
+- The database contains personal data (client names in portfolios, owner email). It stays on the
+  Mac, the database password is local-only, and full API payloads are not written to log files.
 
 ---
 
-## 5. Frontend Design
+## 5. Frontend Design (plain JavaScript)
 
 ```
 frontend/src/
-├── api/            # Generated OpenAPI client + TanStack Query hooks
-├── components/     # Reusable UI pieces (table, form fields, dialogs)
-├── pages/          # One folder per screen from the mockup
-├── routes.tsx      # React Router
-├── theme/          # Colours, typography matching the mockup
-└── main.tsx
+├── api/            # fetch wrapper + TanStack Query hooks (useOrders, useImport, …)
+├── components/     # Reusable pieces (money/quantity cells, status badges, dialogs)
+├── pages/
+│   ├── OrdersPage.jsx       # list + filters + import button
+│   ├── OrderDetailPage.jsx  # view/edit order and allocations
+│   └── ImportsPage.jsx      # import history
+├── App.jsx         # layout + React Router routes
+└── main.jsx
 ```
 
-Expected screens (to be aligned with your mockup):
+**Default screens** (built first; restyled if a mockup arrives):
 
-1. **List / overview** – data grid with paging, sorting, filtering, search; badges for
-   "modified locally" / "sync conflict".
-2. **Detail / edit** – form with validation, save/cancel, concurrency-conflict message.
-3. **Create** – same form, empty.
-4. **Sync status** – "Import now" button, last runs and their results.
+1. **Orders**: a table with booked date, side (buy/sell), asset name and ISIN, custody, type,
+   value, price, currency, settlement amount and status. It has filters for date range, side,
+   custody and status, plus a search box. Badges show "edited" and "conflict". An
+   **Import** button opens the date-range dialog and shows the result counts.
+2. **Order detail / edit**: editable order fields and an allocations table (portfolio, value)
+   with a running total that must equal the order value. It has Save, Cancel, Revert and Delete.
+3. **Import history**: the past runs with time, date range, status, counts and errors.
 
-**Mockup workflow:** once you share the mockup (image, Figma link or PDF), I will
-(1) break it into components, (2) map every field to the data model / API,
-(3) list any gaps or questions, then (4) implement it pixel-close.
+If a mockup arrives later (image, PDF or Figma), it is mapped onto these components; the backend
+does not change.
 
 ---
 
-## 6. Repository Layout & Runtime
+## 6. Repository Layout & Running on the Mac
 
 ```
 ContractNoteManager/
-├── backend/                 # Spring Boot (Maven)
-├── frontend/                # React + Vite
-├── docs/                    # Architecture, ADRs, mockups
-├── docker-compose.yml       # postgres + backend + frontend
-└── .github/workflows/ci.yml
+├── backend/                 # Spring Boot (Maven wrapper ./mvnw)
+├── frontend/                # React + Vite (JavaScript)
+├── docs/                    # This plan, notes, (later) mockups
+├── docker-compose.yml       # PostgreSQL only
+└── README.md                # Setup and run instructions
 ```
 
-- **Local dev:** `docker compose up db`, then `./mvnw spring-boot:run` and `npm run dev`
-  (Vite proxies `/api` to the backend → no CORS issues).
-- **Production options:** (a) one container – frontend built into Spring Boot's static resources;
-  or (b) separate containers with Nginx serving the frontend and reverse-proxying `/api`.
-- Configuration via Spring profiles (`dev`, `test`, `prod`) and environment variables.
+**One-time setup on the Mac** (Homebrew):
+
+- `brew install openjdk@21 node`
+- Docker Desktop, for PostgreSQL. Alternatively `brew install postgresql@16` without Docker.
+
+**Development** (live reload):
+
+- `docker compose up -d` starts PostgreSQL on `localhost:5432`, with its data in a Docker volume.
+- `cd backend && ./mvnw spring-boot:run` starts the API on `localhost:8080`.
+- `cd frontend && npm run dev` starts the UI on `localhost:5173`. Vite forwards `/api` to the
+  backend.
+
+**Everyday use:** `./mvnw package` builds the frontend into the Spring Boot JAR. After that,
+`java -jar backend/target/contractnotemanager.jar` serves the whole app at
+`http://localhost:8080`. A `start.sh` script can run both steps.
+
+**Backups:** a `pg_dump` script (`scripts/backup.sh`) for when the data becomes valuable.
 
 ---
 
@@ -385,31 +407,25 @@ ContractNoteManager/
 
 | Phase | Deliverable | Done when |
 |---|---|---|
-| **0. Scaffolding** | Repo structure, Spring Boot + React skeletons, Docker Compose with Postgres, Flyway, CI pipeline | `docker compose up` shows a "hello" page fetching from `/api/v1/health` |
-| **1. Data model** | Entities + Flyway migrations derived from the external API payload | Migrations run cleanly; repository tests green (Testcontainers) |
-| **2. Ingestion** | API client, mapping, upsert, scheduled + manual sync, sync log | Import against WireMock and the real API populates the DB idempotently |
-| **3. REST API** | CRUD endpoints, validation, paging/filtering, optimistic locking, error handling, OpenAPI | Endpoints covered by integration tests; Swagger UI usable |
-| **4. UI from mockup** | List, detail/edit, create, sync status screens | Matches mockup; full flow works end-to-end |
-| **5. Hardening** | Authentication/roles, audit history, logging/metrics (Actuator), E2E tests (Playwright) | Production-ready checklist passed |
-| **6. Deployment** | Production Docker image(s), environment config, DB backups | Running on the target environment |
+| **0. Scaffolding** | Repo structure, Spring Boot + React (JS) skeletons, Docker Compose with Postgres, Flyway, README | The app starts on the Mac and the UI shows data from a backend endpoint |
+| **1. Data model** | Flyway migrations and JPA entities from 4.6 | Migrations run cleanly; repository tests green (Testcontainers) |
+| **2. Import** | Sharpfin client, paging, mapping, upsert, import log, `POST /imports` | An import (against WireMock and the real API) fills the DB; importing again doesn't duplicate |
+| **3. REST API** | Order list/detail/edit/allocations/delete/revert, validation, error handling | Integration tests green; usable in Swagger UI |
+| **4. UI** | Orders list, detail/edit, import dialog, import history | The full flow works in the browser: import → browse → edit → revert |
+| **5. Polish** | Single-JAR packaging, `start.sh`, backup script, optional change history | Runs with one command on the Mac |
 
-Phases 2 and 3 can be developed in parallel; phase 4 can start against mocked API responses
-as soon as the OpenAPI contract of phase 3 is agreed.
+Phases 2 and 3 can be built in parallel. Phase 4 can start as soon as the API in 4.5 is fixed.
 
 ---
 
-## 8. Open Questions (needed before / during Phase 1)
+## 8. Open Questions
 
-1. **External API:** endpoint and response are known (see 4.2.1). Still open: authentication method and rate limits.
-2. **Sync frequency:** on demand only, scheduled (how often), or both? Data volume (records per run)?
-3. **Edit vs. re-import conflict strategy:** A, B or C from section 4.3?
-4. **Database:** is PostgreSQL fine, or is there an existing company DB (SQL Server, Oracle, MySQL)?
-5. **Users & security:** single user or multiple users/roles? Existing identity provider (SSO)?
-6. **Hosting target:** on-premise server, cloud (AWS/Azure/GCP), Kubernetes, or local only?
-7. **Frontend language:** TypeScript (recommended) or plain JavaScript?
-8. **Mockup:** please share it (image/PDF/Figma) – it determines screens and component library.
-9. **Write-back:** should changes ever be pushed back to the external API, or is the DB the end of the line?
-10. **Which fields are editable?** E.g. price, commission, fees, allocations, comment, status – or everything?
-11. **Contract notes:** given the project name and `custody.contract_notes_enabled`, should the app
-    later *produce* contract notes (e.g. one PDF per order allocation / portfolio)? That would add a
-    `contract_note` table and a document generator to the plan.
+1. **Sharpfin authentication:** how does a call to `demo2.sharpfin.com/api/...` authenticate?
+   An API key, a bearer token, or a browser session cookie? (Needed for phase 2.)
+2. **Editable fields:** which order fields should be editable? For example price, commission,
+   fees, allocations, comment, status, or everything?
+3. **Write-back:** should edits ever be sent back to Sharpfin, or does the data end in the
+   local DB? (Not decided yet; the design keeps it possible.)
+4. **Contract notes:** given the project name and `custody.contract_notes_enabled`, should the
+   app later *produce* contract notes (e.g. one PDF per portfolio allocation)?
+5. **Mockup:** not decided yet. The default UI from section 5 is built first.
