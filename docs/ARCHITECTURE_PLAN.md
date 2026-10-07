@@ -16,7 +16,7 @@
 | Users | **One user**, no login |
 | Where it runs | **Locally on a Mac** |
 | Import trigger | **Manual only**: one run per click of an "Import" button |
-| Screen mockup | Not decided yet. A sensible default UI is built first and can be restyled to a mockup later |
+| Screen mockup | `docs/mockups/order-management.webp` (Order Management list screen, see section 5) |
 
 ---
 
@@ -32,9 +32,9 @@
 | Schema migrations | **Flyway** | Versioned SQL scripts, applied automatically at startup |
 | API documentation | springdoc-openapi (Swagger UI) | Browse and try the backend API at `/swagger-ui.html` |
 | Frontend | **React 18 + Vite, plain JavaScript** (`.jsx`) | Large ecosystem, fast dev loop, no TypeScript |
-| UI components | **MUI** (Material UI) incl. the free MUI X DataGrid | Ready-made table with sorting/filtering, forms, dialogs |
+| UI components | **Ant Design** (antd) | The mockup's dense table, pill pagination with page-size picker, select filters, date-range picker and drawers are all standard antd components, so the screen can be matched closely with little custom CSS |
 | Data fetching | TanStack Query + a small `fetch` wrapper | Caching and automatic refresh after edits |
-| Forms | React Hook Form | Simple form state and validation |
+| Forms | Ant Design `Form` | Built-in form state and validation, consistent with the rest of the UI |
 | Build | Maven (backend, also builds the frontend into the JAR), npm (frontend) | |
 | Testing | JUnit 5, Testcontainers (real Postgres), WireMock (fake Sharpfin API); Vitest + React Testing Library | |
 
@@ -191,11 +191,13 @@ Because imports are manual, the rule can stay simple: **local edits win**.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/orders?page=&size=&sort=&bookedFrom=&bookedTo=&status=&side=&custody=&asset=&q=` | Paged, sortable, filterable order list |
+| GET | `/api/v1/orders?page=&size=&sort=&bookedFrom=&bookedTo=&asset=&portfolio=&owner=&status=&custody=&includeDeleted=` | Paged, sortable, filterable order list (server-side, matching the mockup's toolbar) |
 | GET | `/api/v1/orders/{id}` | Order detail including allocations |
 | PATCH | `/api/v1/orders/{id}` | Edit order fields (requires `version`) |
 | PUT | `/api/v1/orders/{id}/allocations` | Replace allocations (validated: sum = order value) |
+| POST | `/api/v1/orders` | Create an order manually ("Create new" button) |
 | DELETE | `/api/v1/orders/{id}` | Soft delete |
+| POST | `/api/v1/orders/bulk` (body: `ids`, `action`) | Actions on the rows ticked in the table, e.g. delete |
 | POST | `/api/v1/orders/{id}/revert` | Discard local edits and restore the last imported values |
 | GET | `/api/v1/custodies`, `/api/v1/assets`, `/api/v1/portfolios` | Reference data for filters and drop-downs |
 | POST | `/api/v1/imports` (body: `fromDate`, `toDate`) | Run an import now |
@@ -345,30 +347,81 @@ CREATE TABLE sync_run (
 
 ## 5. Frontend Design (plain JavaScript)
 
+The mockup (`docs/mockups/order-management.webp`) shows Sharpfin's *Order Management* list
+screen. The app uses the same layout and columns, with its own name and logo instead of the
+Sharpfin branding.
+
 ```
 frontend/src/
 ├── api/            # fetch wrapper + TanStack Query hooks (useOrders, useImport, …)
-├── components/     # Reusable pieces (money/quantity cells, status badges, dialogs)
+├── components/
+│   ├── AppLayout.jsx        # dark left sidebar, page header, user name top right
+│   ├── OrderToolbar.jsx     # search fields, date range, filters, buttons
+│   ├── OrdersTable.jsx      # the main table
+│   ├── OrderDrawer.jsx      # create / edit order + allocations
+│   └── ImportDialog.jsx     # date range → run import → result counts
 ├── pages/
-│   ├── OrdersPage.jsx       # list + filters + import button
-│   ├── OrderDetailPage.jsx  # view/edit order and allocations
-│   └── ImportsPage.jsx      # import history
-├── App.jsx         # layout + React Router routes
+│   ├── OrdersPage.jsx       # tab "Orders"
+│   └── ImportsPage.jsx      # tab "Imports" (import history)
+├── App.jsx
 └── main.jsx
 ```
 
-**Default screens** (built first; restyled if a mockup arrives):
+### 5.1 Layout
 
-1. **Orders**: a table with booked date, side (buy/sell), asset name and ISIN, custody, type,
-   value, price, currency, settlement amount and status. It has filters for date range, side,
-   custody and status, plus a search box. Badges show "edited" and "conflict". An
-   **Import** button opens the date-range dialog and shows the result counts.
-2. **Order detail / edit**: editable order fields and an allocations table (portfolio, value)
-   with a running total that must equal the order value. It has Save, Cancel, Revert and Delete.
-3. **Import history**: the past runs with time, date range, status, counts and errors.
+| Mockup element | In this app |
+|---|---|
+| Dark left sidebar with modules (Dashboard, Wealth Management, …) | Same style, but only the module this app has: **Order Management**. The other entries are left out |
+| Header "Order Management", user name/role top right, "EN" | Same. The user name is a fixed setting (one user); language is English only |
+| "STAGE" badge | Shows which Sharpfin environment the data was imported from (e.g. `demo2`) |
+| Tabs **Orders** / **Rebalance** | **Orders** / **Imports** (import history). There is no rebalancing in this app |
 
-If a mockup arrives later (image, PDF or Figma), it is mapped onto these components; the backend
-does not change.
+### 5.2 Toolbar → API filters
+
+| Mockup control | Behaviour | API parameter |
+|---|---|---|
+| Asset search | Free text on asset name or ISIN | `asset` |
+| Container search | Free text on portfolio name (orders with an allocation to that portfolio) | `portfolio` |
+| Date range `2026-10-07 – 2026-10-07` | Booked date range, default today | `bookedFrom`, `bookedTo` |
+| Three icon toggles (hourglass, list, …) | **Unclear**, see open questions | – |
+| Owner / Status / Custody drop-downs | Multi-select, options filled from the stored data | `owner`, `status`, `custody` |
+| Eye-slash toggle | Show deleted orders | `includeDeleted` |
+| "Fund Accounting Orders" | **Unclear**, see open questions | – |
+| **Create new** | Opens the order drawer empty | `POST /orders` |
+| *(new)* **Import from Sharpfin** | Opens the import dialog. Placed next to "Create new" | `POST /imports` |
+
+### 5.3 Table columns → data
+
+| Column | Source | Sortable |
+|---|---|---|
+| ☐ (row selection) | Bulk actions on ticked rows | – |
+| Asset | `asset.name` | ✓ |
+| ISIN | `asset.isin` | ✓ |
+| Buy / Sell | `side` | |
+| Status | `status` (+ "edited" / "conflict" badges) | ✓ |
+| Booked | `booked_date` (default sort) | ✓ |
+| Valid to | `valid_to` | ✓ |
+| Quantity | `value` when `order_type = quantity`; **empty** for amount orders (as with AMF Räntefond Lång in the mockup) | |
+| Price | `price` | |
+| Amount | `settlement_amount` (negative for buys) | |
+| Commission | `commission` | |
+| Curr | `currency_code` | |
+| Owner | `owner.name` | ✓ |
+| Counterpart | `broker` (empty in the current data) | |
+| Custody | `custody.name` | |
+| ⚙ (header) | Show/hide columns; the choice is remembered in the browser | – |
+
+Numbers are right-aligned with thousands separators and 2 decimals (`811,809.28`), as in the
+mockup. The table is server-side paged with page size 10 and a size picker, as in the mockup.
+
+### 5.4 Row actions
+
+| Icon | Action |
+|---|---|
+| Blue (phone) | **Unclear**, see open questions |
+| Green (document) | **Unclear**, probably the contract note for the order (see open questions) |
+| Pencil | Opens the **order drawer**: order fields plus an allocations table (portfolio, value) with a running total that must match the order value. Save / Cancel |
+| ⋯ (more) | Revert to imported values, Delete / Restore, Show conflict details |
 
 ---
 
@@ -428,4 +481,9 @@ Phases 2 and 3 can be built in parallel. Phase 4 can start as soon as the API in
    local DB? (Not decided yet; the design keeps it possible.)
 4. **Contract notes:** given the project name and `custody.contract_notes_enabled`, should the
    app later *produce* contract notes (e.g. one PDF per portfolio allocation)?
-5. **Mockup:** not decided yet. The default UI from section 5 is built first.
+5. **Mockup details** (section 5): what do these do?
+   - the three icon toggles next to the date range (hourglass, list, …)
+   - the "Fund Accounting Orders" button
+   - the blue (phone) and green (document) row buttons
+6. **Bulk actions:** which actions should be available for ticked rows? Delete only, or more
+   (for example creating contract notes)?
