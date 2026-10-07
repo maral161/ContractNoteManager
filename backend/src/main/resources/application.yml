@@ -8,7 +8,7 @@ spring:
   config:
     import: optional:file:./application-local.yml   # git-ignored local overrides
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/contractnotemanager}
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/contractnotemanager}
     username: ${DB_USERNAME:cnm}
     password: ${DB_PASSWORD:cnm}
   jpa:

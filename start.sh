@@ -4,26 +4,29 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-db_reachable() { (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; }
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
-if db_reachable && ! (command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1); then
-  echo "Using the PostgreSQL that is already running on localhost:5432."
-elif command -v docker >/dev/null 2>&1; then
-  if ! docker info >/dev/null 2>&1; then
-    echo "Docker Desktop is not running – starting it…"
-    open -a Docker 2>/dev/null || true
-    for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 2; done
-    if ! docker info >/dev/null 2>&1; then
-      echo "Docker Desktop did not start. Open it, wait for 'Engine running', and run ./start.sh again."
-      echo "(Or use a Homebrew PostgreSQL instead, see README section 1.)"
-      exit 1
-    fi
-  fi
+docker_ready() {
+  command -v docker >/dev/null 2>&1 || return 1
+  docker info >/dev/null 2>&1 && return 0
+  echo "Docker Desktop is not running – starting it…"
+  open -a Docker 2>/dev/null || return 1
+  for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && return 0; sleep 2; done
+  return 1
+}
+
+if docker_ready; then
+  # The app's own database in Docker, on port 5433 (5432 may be used by another PostgreSQL)
   docker compose up -d db
   echo "Waiting for the database…"
-  for _ in $(seq 1 30); do db_reachable && break; sleep 1; done
+  for _ in $(seq 1 30); do port_open 5433 && break; sleep 1; done
+elif port_open 5432; then
+  echo "Docker is not available – using the PostgreSQL running on localhost:5432."
+  export DB_URL="${DB_URL:-jdbc:postgresql://localhost:5432/contractnotemanager}"
 else
-  echo "Docker not found – make sure PostgreSQL is running on localhost:5432 (see README)."
+  echo "No database: start Docker Desktop (wait for 'Engine running') or a PostgreSQL on port 5432,"
+  echo "then run ./start.sh again. See README section 1."
+  exit 1
 fi
 
 JAR=backend/target/contractnotemanager.jar

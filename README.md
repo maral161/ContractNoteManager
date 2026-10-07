@@ -25,7 +25,8 @@ Claude API via the official Java SDK (`claude-opus-5-5`).
 brew install openjdk@21 node
 ```
 
-PostgreSQL – either **Docker Desktop** (recommended; `start.sh` starts the database for you) or Homebrew:
+PostgreSQL – either **Docker Desktop** (recommended; `start.sh` starts the app's own database on port **5433**,
+so it doesn't clash with any other PostgreSQL on your Mac) or Homebrew (port 5432, used when Docker isn't available):
 
 ```bash
 brew install postgresql@16 && brew services start postgresql@16
@@ -41,7 +42,7 @@ cp backend/application-local.yml.example backend/application-local.yml
 
 and fill in the Sharpfin username/password and your Anthropic API key. That file is git-ignored.
 Environment variables work too: `SHARPFIN_USERNAME`, `SHARPFIN_PASSWORD`, `ANTHROPIC_API_KEY`,
-`SHARPFIN_BASE_URL` (default `https://demo2.sharpfin.com`).
+`SHARPFIN_BASE_URL` (default `https://demo2.sharpfin.com`), `DB_URL` (default `jdbc:postgresql://localhost:5433/contractnotemanager`).
 
 ## 2. Start
 

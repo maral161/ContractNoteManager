@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: cnm
       POSTGRES_PASSWORD: cnm
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5433:5432"   # 5433 so it never clashes with another local PostgreSQL
     volumes:
       - cnm-data:/var/lib/postgresql/data
     restart: unless-stopped
