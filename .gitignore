@@ -1,0 +1,16 @@
+# Build output
+backend/target/
+frontend/node_modules/
+frontend/dist/
+
+# Local settings and secrets – never commit
+application-local.yml
+backend/application-local.yml
+.env
+*.env.local
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store

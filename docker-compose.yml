@@ -1,0 +1,16 @@
+# PostgreSQL for ContractNoteManager (data is kept in the "cnm-data" volume)
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: contractnotemanager
+      POSTGRES_USER: cnm
+      POSTGRES_PASSWORD: cnm
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - cnm-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  cnm-data:

@@ -1,0 +1,961 @@
+[
+  {
+    "custody": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDE=",
+      "deleted": false,
+      "name": "Nordnet",
+      "domicile": "SE",
+      "type": "custody",
+      "tag": "nordnet",
+      "contract_notes_enabled": false,
+      "recon_enabled": true
+    },
+    "key": "LTU3MDIzNTU3Mzk5MDAwMDEwMDA=",
+    "version": 1,
+    "deleted": false,
+    "status": "new",
+    "type": "quantity",
+    "allocation": [
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTA=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Alpha - 1001",
+        "value": "1761",
+        "commission": "1134",
+        "portfolio_quantity": "2927.0",
+        "portfolio_weight": "12.55",
+        "target_quantity": "1166.0",
+        "target_weight": "5.00",
+        "order_weight": "-7.55"
+      },
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTE=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Beta - 1002",
+        "value": "103",
+        "commission": "66",
+        "portfolio_quantity": "189.0",
+        "portfolio_weight": "11.03",
+        "target_quantity": "86.0",
+        "target_weight": "5.02",
+        "order_weight": "-6.01"
+      }
+    ],
+    "broker": {
+      "name": "BN Amro",
+      "type": "broker",
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDM=",
+      "deleted": false,
+      "bic": "ABNANL2A",
+      "lei": ""
+    },
+    "exchange": {},
+    "price": "435.52",
+    "value": "1864",
+    "booked_date": "2026-10-07",
+    "side": "sell",
+    "asset": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAxMDA=",
+      "deleted": false,
+      "name": "ABB",
+      "quote_currency_code": "SEK",
+      "settlement_currency_code": "SEK",
+      "trade_duration": 0,
+      "settlement_duration": 2,
+      "identifiers": [
+        {
+          "key": "isin",
+          "value": "CH0012221716",
+          "name": "ISIN"
+        }
+      ],
+      "classifications": [
+        {
+          "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDQ=",
+          "value": "SWE-EQ"
+        }
+      ],
+      "domicile": "CH",
+      "type": "equity"
+    },
+    "currency_code": "SEK",
+    "comment": "",
+    "source": "rebalance",
+    "valid_to": "2026-10-07",
+    "partial_fill_allowed": false,
+    "settlement_amount": "811809.28",
+    "commission": "1200",
+    "owner": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDI=",
+      "deleted": false,
+      "name": "Alex Advisor",
+      "email": "advisor@example.com",
+      "type": {
+        "id": "organization"
+      }
+    },
+    "accrued_interest": "0",
+    "is_merged": false,
+    "handled_manually": false,
+    "up_front_fee": "0",
+    "issuer_fee": "0",
+    "handled_manually_eligible": false
+  },
+  {
+    "custody": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDE=",
+      "deleted": false,
+      "name": "Nordnet",
+      "domicile": "SE",
+      "type": "custody",
+      "tag": "nordnet",
+      "contract_notes_enabled": false,
+      "recon_enabled": true
+    },
+    "key": "LTU3MDIzNTU3Mzk5MDAwMDEwMDE=",
+    "version": 1,
+    "deleted": false,
+    "status": "new",
+    "type": "quantity",
+    "allocation": [
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTA=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Alpha - 1001",
+        "value": "452",
+        "commission": "0",
+        "portfolio_quantity": "1356.0",
+        "portfolio_weight": "11.91",
+        "target_quantity": "904.0",
+        "target_weight": "7.94",
+        "order_weight": "-3.97"
+      },
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTE=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Beta - 1002",
+        "value": "21",
+        "commission": "0",
+        "portfolio_quantity": "63.0",
+        "portfolio_weight": "8.43",
+        "target_quantity": "42.0",
+        "target_weight": "5.62",
+        "order_weight": "-2.81"
+      }
+    ],
+    "broker": {},
+    "exchange": {},
+    "price": "219.65",
+    "value": "473",
+    "booked_date": "2026-10-07",
+    "side": "sell",
+    "asset": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAxMDE=",
+      "deleted": false,
+      "name": "Apple Inc",
+      "quote_currency_code": "USD",
+      "settlement_currency_code": "USD",
+      "trade_duration": 0,
+      "settlement_duration": 2,
+      "identifiers": [
+        {
+          "key": "isin",
+          "value": "US0378331005",
+          "name": "ISIN"
+        }
+      ],
+      "classifications": [
+        {
+          "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDQ=",
+          "value": "US-EQ"
+        }
+      ],
+      "domicile": "US",
+      "type": "equity"
+    },
+    "currency_code": "USD",
+    "comment": "",
+    "source": "rebalance",
+    "valid_to": "2026-10-07",
+    "partial_fill_allowed": false,
+    "settlement_amount": "103894.45",
+    "commission": "0",
+    "owner": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDI=",
+      "deleted": false,
+      "name": "Alex Advisor",
+      "email": "advisor@example.com",
+      "type": {
+        "id": "organization"
+      }
+    },
+    "accrued_interest": "0",
+    "is_merged": false,
+    "handled_manually": false,
+    "up_front_fee": "0",
+    "issuer_fee": "0",
+    "handled_manually_eligible": false
+  },
+  {
+    "custody": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDE=",
+      "deleted": false,
+      "name": "Nordnet",
+      "domicile": "SE",
+      "type": "custody",
+      "tag": "nordnet",
+      "contract_notes_enabled": false,
+      "recon_enabled": true
+    },
+    "key": "LTU3MDIzNTU3Mzk5MDAwMDEwMDI=",
+    "version": 1,
+    "deleted": false,
+    "status": "new",
+    "type": "quantity",
+    "allocation": [
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTA=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Alpha - 1001",
+        "value": "81",
+        "commission": "0",
+        "portfolio_quantity": "243.0",
+        "portfolio_weight": "11.22",
+        "target_quantity": "162.0",
+        "target_weight": "7.48",
+        "order_weight": "-3.74"
+      }
+    ],
+    "broker": {},
+    "exchange": {},
+    "price": "215.6",
+    "value": "81",
+    "booked_date": "2026-10-07",
+    "side": "sell",
+    "asset": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAxMDI=",
+      "deleted": false,
+      "name": "International Consolidated Airlines Group SA",
+      "quote_currency_code": "GBP",
+      "settlement_currency_code": "GBP",
+      "trade_duration": 0,
+      "settlement_duration": 2,
+      "identifiers": [
+        {
+          "key": "isin",
+          "value": "ES0177542018",
+          "name": "ISIN"
+        }
+      ],
+      "classifications": [
+        {
+          "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDQ=",
+          "value": "UK-EQ"
+        }
+      ],
+      "domicile": "ES",
+      "type": "equity"
+    },
+    "currency_code": "GBP",
+    "comment": "",
+    "source": "rebalance",
+    "valid_to": "2026-10-07",
+    "partial_fill_allowed": false,
+    "settlement_amount": "17463.6",
+    "commission": "0",
+    "owner": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDI=",
+      "deleted": false,
+      "name": "Alex Advisor",
+      "email": "advisor@example.com",
+      "type": {
+        "id": "organization"
+      }
+    },
+    "accrued_interest": "0",
+    "is_merged": false,
+    "handled_manually": false,
+    "up_front_fee": "0",
+    "issuer_fee": "0",
+    "handled_manually_eligible": false
+  },
+  {
+    "custody": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDE=",
+      "deleted": false,
+      "name": "Nordnet",
+      "domicile": "SE",
+      "type": "custody",
+      "tag": "nordnet",
+      "contract_notes_enabled": false,
+      "recon_enabled": true
+    },
+    "key": "LTU3MDIzNTU3Mzk5MDAwMDEwMDM=",
+    "version": 1,
+    "deleted": false,
+    "status": "new",
+    "type": "quantity",
+    "allocation": [
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTA=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Alpha - 1001",
+        "value": "89",
+        "commission": "0",
+        "portfolio_quantity": "178.0",
+        "portfolio_weight": "10.19",
+        "target_quantity": "267.0",
+        "target_weight": "15.29",
+        "order_weight": "5.10"
+      },
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTE=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Beta - 1002",
+        "value": "9",
+        "commission": "0",
+        "portfolio_quantity": "18.0",
+        "portfolio_weight": "8.35",
+        "target_quantity": "27.0",
+        "target_weight": "12.52",
+        "order_weight": "4.17"
+      }
+    ],
+    "broker": {},
+    "exchange": {},
+    "price": "123.57",
+    "value": "98",
+    "booked_date": "2026-10-07",
+    "side": "buy",
+    "asset": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAxMDM=",
+      "deleted": false,
+      "name": "Barclays PLC",
+      "quote_currency_code": "GBP",
+      "settlement_currency_code": "GBP",
+      "trade_duration": 0,
+      "settlement_duration": 2,
+      "identifiers": [
+        {
+          "key": "isin",
+          "value": "GB0031348658",
+          "name": "ISIN"
+        }
+      ],
+      "classifications": [
+        {
+          "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDQ=",
+          "value": "UK-EQ"
+        }
+      ],
+      "domicile": "GB",
+      "type": "equity"
+    },
+    "currency_code": "GBP",
+    "comment": "",
+    "source": "rebalance",
+    "valid_to": "2026-10-07",
+    "partial_fill_allowed": false,
+    "settlement_amount": "-12109.86",
+    "commission": "0",
+    "owner": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDI=",
+      "deleted": false,
+      "name": "Alex Advisor",
+      "email": "advisor@example.com",
+      "type": {
+        "id": "organization"
+      }
+    },
+    "accrued_interest": "0",
+    "is_merged": false,
+    "handled_manually": false,
+    "up_front_fee": "0",
+    "issuer_fee": "0",
+    "handled_manually_eligible": false
+  },
+  {
+    "custody": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDE=",
+      "deleted": false,
+      "name": "Nordnet",
+      "domicile": "SE",
+      "type": "custody",
+      "tag": "nordnet",
+      "contract_notes_enabled": false,
+      "recon_enabled": true
+    },
+    "key": "LTU3MDIzNTU3Mzk5MDAwMDEwMDQ=",
+    "version": 1,
+    "deleted": false,
+    "status": "new",
+    "type": "quantity",
+    "allocation": [
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTA=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Alpha - 1001",
+        "value": "418",
+        "commission": "0",
+        "portfolio_quantity": "1254.0",
+        "portfolio_weight": "11.04",
+        "target_quantity": "836.0",
+        "target_weight": "7.36",
+        "order_weight": "-3.68"
+      },
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTE=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Beta - 1002",
+        "value": "35",
+        "commission": "0",
+        "portfolio_quantity": "105.0",
+        "portfolio_weight": "8.22",
+        "target_quantity": "70.0",
+        "target_weight": "5.48",
+        "order_weight": "-2.74"
+      }
+    ],
+    "broker": {},
+    "exchange": {},
+    "price": "225.94",
+    "value": "453",
+    "booked_date": "2026-10-07",
+    "side": "sell",
+    "asset": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAxMDQ=",
+      "deleted": false,
+      "name": "Meta Platforms Inc",
+      "quote_currency_code": "USD",
+      "settlement_currency_code": "USD",
+      "trade_duration": 0,
+      "settlement_duration": 2,
+      "identifiers": [
+        {
+          "key": "isin",
+          "value": "US30303M1027",
+          "name": "ISIN"
+        }
+      ],
+      "classifications": [
+        {
+          "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDQ=",
+          "value": "US-EQ"
+        }
+      ],
+      "domicile": "US",
+      "type": "equity"
+    },
+    "currency_code": "USD",
+    "comment": "",
+    "source": "rebalance",
+    "valid_to": "2026-10-07",
+    "partial_fill_allowed": false,
+    "settlement_amount": "102350.82",
+    "commission": "0",
+    "owner": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDI=",
+      "deleted": false,
+      "name": "Alex Advisor",
+      "email": "advisor@example.com",
+      "type": {
+        "id": "organization"
+      }
+    },
+    "accrued_interest": "0",
+    "is_merged": false,
+    "handled_manually": false,
+    "up_front_fee": "0",
+    "issuer_fee": "0",
+    "handled_manually_eligible": false
+  },
+  {
+    "custody": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDE=",
+      "deleted": false,
+      "name": "Nordnet",
+      "domicile": "SE",
+      "type": "custody",
+      "tag": "nordnet",
+      "contract_notes_enabled": false,
+      "recon_enabled": true
+    },
+    "key": "LTU3MDIzNTU3Mzk5MDAwMDEwMDU=",
+    "version": 1,
+    "deleted": false,
+    "status": "new",
+    "type": "quantity",
+    "allocation": [
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTA=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Alpha - 1001",
+        "value": "6886",
+        "commission": "0",
+        "portfolio_quantity": "20658.0",
+        "portfolio_weight": "10.60",
+        "target_quantity": "13772.0",
+        "target_weight": "7.07",
+        "order_weight": "-3.53"
+      },
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTE=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Beta - 1002",
+        "value": "627",
+        "commission": "0",
+        "portfolio_quantity": "1881.0",
+        "portfolio_weight": "8.42",
+        "target_quantity": "1254.0",
+        "target_weight": "5.61",
+        "order_weight": "-2.81"
+      }
+    ],
+    "broker": {},
+    "exchange": {},
+    "price": "39.89",
+    "value": "7513",
+    "booked_date": "2026-10-07",
+    "side": "sell",
+    "asset": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAxMDU=",
+      "deleted": false,
+      "name": "Telia Company",
+      "quote_currency_code": "SEK",
+      "settlement_currency_code": "SEK",
+      "trade_duration": 0,
+      "settlement_duration": 2,
+      "identifiers": [
+        {
+          "key": "isin",
+          "value": "SE0000667925",
+          "name": "ISIN"
+        }
+      ],
+      "classifications": [
+        {
+          "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDQ=",
+          "value": "SWE-EQ"
+        }
+      ],
+      "domicile": "SE",
+      "type": "equity"
+    },
+    "currency_code": "SEK",
+    "comment": "",
+    "source": "rebalance",
+    "valid_to": "2026-10-07",
+    "partial_fill_allowed": false,
+    "settlement_amount": "299693.57",
+    "commission": "0",
+    "owner": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDI=",
+      "deleted": false,
+      "name": "Alex Advisor",
+      "email": "advisor@example.com",
+      "type": {
+        "id": "organization"
+      }
+    },
+    "accrued_interest": "0",
+    "is_merged": false,
+    "handled_manually": false,
+    "up_front_fee": "0",
+    "issuer_fee": "0",
+    "handled_manually_eligible": false
+  },
+  {
+    "custody": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDE=",
+      "deleted": false,
+      "name": "Nordnet",
+      "domicile": "SE",
+      "type": "custody",
+      "tag": "nordnet",
+      "contract_notes_enabled": false,
+      "recon_enabled": true
+    },
+    "key": "LTU3MDIzNTU3Mzk5MDAwMDEwMDY=",
+    "version": 1,
+    "deleted": false,
+    "status": "new",
+    "type": "quantity",
+    "allocation": [
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTA=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Alpha - 1001",
+        "value": "95",
+        "commission": "0",
+        "portfolio_quantity": "285.0",
+        "portfolio_weight": "8.54",
+        "target_quantity": "190.0",
+        "target_weight": "5.69",
+        "order_weight": "-2.85"
+      }
+    ],
+    "broker": {},
+    "exchange": {},
+    "price": "204.9",
+    "value": "95",
+    "booked_date": "2026-10-07",
+    "side": "sell",
+    "asset": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAxMDY=",
+      "deleted": false,
+      "name": "Kinnevik A",
+      "quote_currency_code": "SEK",
+      "settlement_currency_code": "SEK",
+      "trade_duration": 0,
+      "settlement_duration": 2,
+      "identifiers": [
+        {
+          "key": "isin",
+          "value": "SE0000164600",
+          "name": "ISIN"
+        }
+      ],
+      "classifications": [
+        {
+          "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDQ=",
+          "value": "SWE-EQ"
+        }
+      ],
+      "domicile": "SE",
+      "type": "equity"
+    },
+    "currency_code": "SEK",
+    "comment": "",
+    "source": "rebalance",
+    "valid_to": "2026-10-07",
+    "partial_fill_allowed": false,
+    "settlement_amount": "19465.5",
+    "commission": "0",
+    "owner": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDI=",
+      "deleted": false,
+      "name": "Alex Advisor",
+      "email": "advisor@example.com",
+      "type": {
+        "id": "organization"
+      }
+    },
+    "accrued_interest": "0",
+    "is_merged": false,
+    "handled_manually": false,
+    "up_front_fee": "0",
+    "issuer_fee": "0",
+    "handled_manually_eligible": false
+  },
+  {
+    "custody": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDE=",
+      "deleted": false,
+      "name": "Nordnet",
+      "domicile": "SE",
+      "type": "custody",
+      "tag": "nordnet",
+      "contract_notes_enabled": false,
+      "recon_enabled": true
+    },
+    "key": "LTU3MDIzNTU3Mzk5MDAwMDEwMDc=",
+    "version": 1,
+    "deleted": false,
+    "status": "new",
+    "type": "quantity",
+    "allocation": [
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTA=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Alpha - 1001",
+        "value": "42",
+        "commission": "0",
+        "portfolio_quantity": "126.0",
+        "portfolio_weight": "10.55",
+        "target_quantity": "84.0",
+        "target_weight": "7.03",
+        "order_weight": "-3.52"
+      },
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTE=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Beta - 1002",
+        "value": "5",
+        "commission": "0",
+        "portfolio_quantity": "15.0",
+        "portfolio_weight": "12.96",
+        "target_quantity": "10.0",
+        "target_weight": "8.64",
+        "order_weight": "-4.32"
+      }
+    ],
+    "broker": {},
+    "exchange": {},
+    "price": "750.17",
+    "value": "47",
+    "booked_date": "2026-10-07",
+    "side": "sell",
+    "asset": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAxMDc=",
+      "deleted": false,
+      "name": "Tesla Inc",
+      "quote_currency_code": "USD",
+      "settlement_currency_code": "USD",
+      "trade_duration": 0,
+      "settlement_duration": 2,
+      "identifiers": [
+        {
+          "key": "isin",
+          "value": "US88160R1014",
+          "name": "ISIN"
+        }
+      ],
+      "classifications": [
+        {
+          "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDQ=",
+          "value": "US-EQ"
+        }
+      ],
+      "domicile": "US",
+      "type": "equity"
+    },
+    "currency_code": "USD",
+    "comment": "",
+    "source": "rebalance",
+    "valid_to": "2026-10-07",
+    "partial_fill_allowed": false,
+    "settlement_amount": "35257.99",
+    "commission": "0",
+    "owner": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDI=",
+      "deleted": false,
+      "name": "Alex Advisor",
+      "email": "advisor@example.com",
+      "type": {
+        "id": "organization"
+      }
+    },
+    "accrued_interest": "0",
+    "is_merged": false,
+    "handled_manually": false,
+    "up_front_fee": "0",
+    "issuer_fee": "0",
+    "handled_manually_eligible": false
+  },
+  {
+    "custody": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDE=",
+      "deleted": false,
+      "name": "Nordnet",
+      "domicile": "SE",
+      "type": "custody",
+      "tag": "nordnet",
+      "contract_notes_enabled": false,
+      "recon_enabled": true
+    },
+    "key": "LTU3MDIzNTU3Mzk5MDAwMDEwMDg=",
+    "version": 1,
+    "deleted": false,
+    "status": "new",
+    "type": "quantity",
+    "allocation": [
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTA=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Alpha - 1001",
+        "value": "2012",
+        "commission": "0",
+        "portfolio_quantity": "6036.0",
+        "portfolio_weight": "8.74",
+        "target_quantity": "4024.0",
+        "target_weight": "5.83",
+        "order_weight": "-2.91"
+      }
+    ],
+    "broker": {},
+    "exchange": {},
+    "price": "23.15",
+    "value": "2012",
+    "booked_date": "2026-10-07",
+    "side": "sell",
+    "asset": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAxMDg=",
+      "deleted": false,
+      "name": "Vodafone Group PLC",
+      "quote_currency_code": "GBP",
+      "settlement_currency_code": "GBP",
+      "trade_duration": 0,
+      "settlement_duration": 2,
+      "identifiers": [
+        {
+          "key": "isin",
+          "value": "GB00BH4HKS39",
+          "name": "ISIN"
+        }
+      ],
+      "classifications": [
+        {
+          "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDQ=",
+          "value": "UK-EQ"
+        }
+      ],
+      "domicile": "GB",
+      "type": "equity"
+    },
+    "currency_code": "GBP",
+    "comment": "",
+    "source": "rebalance",
+    "valid_to": "2026-10-07",
+    "partial_fill_allowed": false,
+    "settlement_amount": "46577.80",
+    "commission": "0",
+    "owner": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDI=",
+      "deleted": false,
+      "name": "Alex Advisor",
+      "email": "advisor@example.com",
+      "type": {
+        "id": "organization"
+      }
+    },
+    "accrued_interest": "0",
+    "is_merged": false,
+    "handled_manually": false,
+    "up_front_fee": "0",
+    "issuer_fee": "0",
+    "handled_manually_eligible": false
+  },
+  {
+    "custody": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDE=",
+      "deleted": false,
+      "name": "Nordnet",
+      "domicile": "SE",
+      "type": "custody",
+      "tag": "nordnet",
+      "contract_notes_enabled": false,
+      "recon_enabled": true
+    },
+    "key": "LTU3MDIzNTU3Mzk5MDAwMDEwMDk=",
+    "version": 1,
+    "deleted": false,
+    "status": "new",
+    "type": "amount",
+    "allocation": [
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTA=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Alpha - 1001",
+        "value": "2205198",
+        "commission": "0",
+        "portfolio_quantity": "4410396.0",
+        "portfolio_weight": "9.34",
+        "target_quantity": "6615594.0",
+        "target_weight": "14.01",
+        "order_weight": "4.67"
+      },
+      {
+        "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMTE=",
+        "status": "new",
+        "reason": "",
+        "external_id": "",
+        "portfolio_name": "Portfolio Beta - 1002",
+        "value": "156963",
+        "commission": "0",
+        "portfolio_quantity": "313926.0",
+        "portfolio_weight": "11.76",
+        "target_quantity": "470889.0",
+        "target_weight": "17.64",
+        "order_weight": "5.88"
+      }
+    ],
+    "broker": {},
+    "exchange": {},
+    "price": "100.35",
+    "value": "2362161",
+    "booked_date": "2026-10-07",
+    "side": "buy",
+    "asset": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAxMDk=",
+      "deleted": false,
+      "name": "AMF Räntefond Lång",
+      "quote_currency_code": "SEK",
+      "settlement_currency_code": "SEK",
+      "trade_duration": 0,
+      "settlement_duration": 2,
+      "identifiers": [
+        {
+          "key": "isin",
+          "value": "SE0000739187",
+          "name": "ISIN"
+        }
+      ],
+      "classifications": [
+        {
+          "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDQ=",
+          "value": "L-FI"
+        }
+      ],
+      "domicile": "SE",
+      "type": "fund",
+      "type_data": {
+        "qty_decimals": 6,
+        "nav_frequency": "daily"
+      }
+    },
+    "currency_code": "SEK",
+    "comment": "",
+    "source": "rebalance",
+    "valid_to": "2026-10-07",
+    "partial_fill_allowed": false,
+    "settlement_amount": "-2362161",
+    "commission": "0",
+    "owner": {
+      "key": "LTU3MDIzNTU3Mzk5MDAwMDAwMDI=",
+      "deleted": false,
+      "name": "Alex Advisor",
+      "email": "advisor@example.com",
+      "type": {
+        "id": "organization"
+      }
+    },
+    "accrued_interest": "0",
+    "is_merged": false,
+    "handled_manually": false,
+    "up_front_fee": "0",
+    "issuer_fee": "0",
+    "handled_manually_eligible": false
+  }
+]

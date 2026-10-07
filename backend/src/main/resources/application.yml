@@ -1,0 +1,58 @@
+server:
+  address: 127.0.0.1          # only reachable from this Mac
+  port: 8080
+
+spring:
+  application:
+    name: contractnotemanager
+  config:
+    import: optional:file:./application-local.yml   # git-ignored local overrides
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/contractnotemanager}
+    username: ${DB_USERNAME:cnm}
+    password: ${DB_PASSWORD:cnm}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+  servlet:
+    multipart:
+      max-file-size: 15MB
+      max-request-size: 100MB
+  jackson:
+    default-property-inclusion: non_null
+
+app:
+  user-name: ${APP_USER_NAME:Markus Alin}
+  user-role: ${APP_USER_ROLE:system user}
+
+sharpfin:
+  base-url: ${SHARPFIN_BASE_URL:https://demo2.sharpfin.com}
+  environment-label: ${SHARPFIN_ENV_LABEL:STAGE}
+  username: ${SHARPFIN_USERNAME:}
+  password: ${SHARPFIN_PASSWORD:}
+  login:
+    path: /api/sessions
+    method: POST
+    username-field: username
+    password-field: password
+    token-field:              # set if the login answer returns a token instead of a cookie
+  page-size: 100
+  timeout: 30s
+
+claude:
+  api-key: ${ANTHROPIC_API_KEY:}
+  model: claude-opus-5-5
+  max-tokens: 8000
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    com.contractnotemanager: INFO
