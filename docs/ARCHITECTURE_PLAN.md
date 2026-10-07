@@ -19,6 +19,7 @@
 | Users | **One user**, no login |
 | Where it runs | **Locally on a Mac** |
 | Import trigger | **Manual only**: one run per click of an "Import" button |
+| Write-back to Sharpfin | **None for now.** Edits, status changes and contract-note matches stay in the local database; a match does **not** set the order to finalized in Sharpfin. The Sharpfin client only reads, so write-back could be added later as a separate step |
 | Screen mockup | `docs/mockups/order-management.webp` (Order Management list screen, see section 5) |
 
 ---
@@ -867,5 +868,3 @@ Phases 2 and 3 can be built in parallel. Phase 4 can start as soon as the API in
    confirmed, either from the Python script or on the first test from the Mac: how the
    username/password are sent (JSON field names, `POST`?), and whether a cookie or a token
    comes back.
-2. **Write-back:** should edits or status changes ever be sent back to Sharpfin? (Not decided
-   yet; the design keeps it possible.)
