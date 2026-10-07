@@ -71,6 +71,12 @@ public class SharpfinClient {
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
         private String bearerToken;
+        private String lastUrl;
+
+        @Override
+        public String lastRequestUrl() {
+            return lastUrl;
+        }
 
         void login() {
             SharpfinProperties.Login login = props.login();
@@ -83,6 +89,8 @@ public class SharpfinClient {
                         .method(login.method(), HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
                         .build();
                 response = http.send(request, HttpResponse.BodyHandlers.ofString());
+                log.info("Sharpfin {} {}{} (fields: {}, {}) → HTTP {}", login.method(), props.baseUrl(), login.path(),
+                        login.usernameField(), login.passwordField(), response.statusCode());
             } catch (IOException e) {
                 throw new SharpfinException("Cannot reach Sharpfin at " + props.baseUrl() + ": " + e.getMessage(), e);
             } catch (InterruptedException e) {
@@ -110,8 +118,8 @@ public class SharpfinClient {
         }
 
         @Override
-        public JsonNode ordersPage(LocalDate from, LocalDate to, int page) {
-            String query = "type=instrument&date_type=active"
+        public JsonNode ordersPage(String dateType, LocalDate from, LocalDate to, int page) {
+            String query = "type=instrument&date_type=" + URLEncoder.encode(dateType, StandardCharsets.UTF_8)
                     + "&page=" + page
                     + "&page_size=" + props.pageSize()
                     + "&no_of_elements=0&sort_field=booked_date&sort_direction=asc"
@@ -145,7 +153,12 @@ public class SharpfinClient {
 
         private HttpResponse<String> send(String pathAndQuery) {
             try {
-                return http.send(baseRequest(pathAndQuery).GET().build(), HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> response = http.send(baseRequest(pathAndQuery).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                lastUrl = props.baseUrl() + pathAndQuery;
+                log.info("Sharpfin GET {} → HTTP {} ({} bytes)", lastUrl, response.statusCode(),
+                        response.body() == null ? 0 : response.body().length());
+                return response;
             } catch (IOException e) {
                 throw new SharpfinException("Cannot reach Sharpfin: " + e.getMessage(), e);
             } catch (InterruptedException e) {

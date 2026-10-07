@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Table, Tag, Tooltip } from 'antd';
+import { Button, Table, Tag, Tooltip, Typography } from 'antd';
 import { CloudDownloadOutlined } from '@ant-design/icons';
 import { useImports } from '../api/hooks';
 import { formatDateTime } from '../lib/format';
@@ -14,6 +14,7 @@ export default function ImportsPage() {
   const columns = [
     { title: 'Started', dataIndex: 'startedAt', render: formatDateTime, width: 140 },
     { title: 'Date range', key: 'range', width: 190, render: (_, r) => `${r.fromDate} – ${r.toDate}` },
+    { title: 'Date type', dataIndex: 'dateType', width: 90, render: (t) => (t ? t.charAt(0) + t.slice(1).toLowerCase() : 'Active') },
     { title: 'Status', dataIndex: 'status', width: 100, render: (s) => <Tag color={STATUS_COLOR[s]}>{s}</Tag> },
     { title: 'In Sharpfin', dataIndex: 'expectedCount', align: 'right', width: 90 },
     { title: 'New', dataIndex: 'createdCount', align: 'right', width: 70 },
@@ -26,6 +27,14 @@ export default function ImportsPage() {
     { title: 'Failed', dataIndex: 'failedCount', align: 'right', width: 70 },
     { title: 'Details missing', dataIndex: 'detailsMissingCount', align: 'right', width: 110 },
     { title: 'Message', dataIndex: 'errorMessage', ellipsis: true },
+    {
+      title: 'Sharpfin request', dataIndex: 'requestUrl', width: 110,
+      render: (url) => url && (
+        <Tooltip title={<span style={{ wordBreak: 'break-all' }}>{url}</span>}>
+          <Typography.Text copyable={{ text: url }} style={{ fontSize: 11 }}>URL</Typography.Text>
+        </Tooltip>
+      ),
+    },
   ];
 
   return (

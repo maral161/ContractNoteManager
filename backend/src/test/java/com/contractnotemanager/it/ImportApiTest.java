@@ -107,6 +107,24 @@ class ImportApiTest extends IntegrationTest {
     }
 
     @Test
+    void sendsTheChosenDateTypeToSharpfin() throws Exception {
+        runImport(); // no date type given → booked
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/imports")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"fromDate\":\"2026-10-01\",\"toDate\":\"2026-10-07\",\"dateType\":\"SETTLED\"}"))
+                .andExpect(status().isOk());
+        var paged = com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor(
+                com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo("/api/orders/paginated"));
+        WIREMOCK.verify(paged.withQueryParam("date_type", com.github.tomakehurst.wiremock.client.WireMock.equalTo("booked")));
+        WIREMOCK.verify(paged.withQueryParam("date_type", com.github.tomakehurst.wiremock.client.WireMock.equalTo("settled"))
+                .withQueryParam("from_date", com.github.tomakehurst.wiremock.client.WireMock.equalTo("2026-10-01")));
+        assertThat(getJson("/api/v1/imports").get(0).path("dateType").asText()).isEqualTo("SETTLED");
+        assertThat(getJson("/api/v1/imports").get(0).path("requestUrl").asText())
+                .contains("/api/orders/paginated?type=instrument&date_type=settled")
+                .contains("from_date=2026-10-01&to_date=2026-10-07");
+    }
+
+    @Test
     void failedLoginIsReported() throws Exception {
         WIREMOCK.resetAll();
         WIREMOCK.stubFor(com.github.tomakehurst.wiremock.client.WireMock.post("/api/sessions")

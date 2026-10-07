@@ -16,6 +16,8 @@ public record SharpfinProperties(
         String username,
         String password,
         Login login,
+        /** Value sent as date_type for each choice; adjust here if Sharpfin uses other names. */
+        @DefaultValue DateTypes dateTypes,
         @DefaultValue("10") int pageSize,
         @DefaultValue("30s") Duration timeout) {
 
@@ -25,6 +27,12 @@ public record SharpfinProperties(
             @DefaultValue("email") String usernameField,
             @DefaultValue("password") String passwordField,
             String tokenField) {
+    }
+
+    public record DateTypes(
+            @DefaultValue("booked") String booked,
+            @DefaultValue("traded") String traded,
+            @DefaultValue("settled") String settled) {
     }
 
     public boolean hasCredentials() {

@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import com.contractnotemanager.config.SharpfinProperties;
 import com.contractnotemanager.domain.ImportRun;
 import com.contractnotemanager.domain.ImportRunStatus;
 import com.contractnotemanager.repository.ImportRunRepository;
@@ -31,10 +32,13 @@ public class ImportService {
     private final SharpfinClient sharpfin;
     private final OrderImporter importer;
     private final ImportRunRepository runs;
+    private final SharpfinProperties props;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
-    public ImportService(SharpfinClient sharpfin, OrderImporter importer, ImportRunRepository runs) {
+    public ImportService(SharpfinClient sharpfin, OrderImporter importer, ImportRunRepository runs,
+            SharpfinProperties props) {
         this.sharpfin = sharpfin;
+        this.props = props;
         this.importer = importer;
         this.runs = runs;
     }
@@ -43,7 +47,7 @@ public class ImportService {
         return running.get();
     }
 
-    public ImportRun runImport(LocalDate from, LocalDate to) {
+    public ImportRun runImport(LocalDate from, LocalDate to, ImportDateType dateType) {
         if (from == null || to == null || to.isBefore(from)) {
             throw ApiException.badRequest("Invalid date range");
         }
@@ -51,18 +55,19 @@ public class ImportService {
             throw ApiException.conflict("An import is already running");
         }
         try {
-            return doImport(from, to);
+            return doImport(from, to, dateType == null ? ImportDateType.BOOKED : dateType);
         } finally {
             running.set(false);
         }
     }
 
-    private ImportRun doImport(LocalDate from, LocalDate to) {
+    private ImportRun doImport(LocalDate from, LocalDate to, ImportDateType dateType) {
         ImportRun run = new ImportRun();
         run.setStartedAt(Instant.now());
         run.setStatus(ImportRunStatus.RUNNING);
         run.setFromDate(from);
         run.setToDate(to);
+        run.setDateType(dateType);
         run = runs.save(run);
 
         Set<String> received = new HashSet<>();
@@ -70,7 +75,14 @@ public class ImportService {
             int page = 1;
             int pages;
             do {
-                JsonNode result = session.ordersPage(from, to, page);
+                JsonNode result;
+                try {
+                    result = session.ordersPage(sharpfinDateType(dateType), from, to, page);
+                } finally {
+                    if (page == 1) {
+                        run.setRequestUrl(session.lastRequestUrl());
+                    }
+                }
                 pages = Math.max(1, result.path("no_of_pages").asInt(1));
                 if (page == 1) {
                     run.setExpectedCount(result.path("no_of_elements").asInt(0));
@@ -98,10 +110,19 @@ public class ImportService {
             run.setStatus(clean ? ImportRunStatus.SUCCESS : ImportRunStatus.PARTIAL);
         }
         run.setFinishedAt(Instant.now());
-        log.info("Import {} {}..{}: {} created, {} updated, {} skipped, {} conflicts, {} failed",
-                run.getStatus(), from, to, run.getCreatedCount(), run.getUpdatedCount(), run.getSkippedCount(),
+        log.info("Import {} {} {}..{}: {} created, {} updated, {} skipped, {} conflicts, {} failed",
+                run.getStatus(), dateType, from, to, run.getCreatedCount(), run.getUpdatedCount(), run.getSkippedCount(),
                 run.getConflictCount(), run.getFailedCount());
         return runs.save(run);
+    }
+
+    private String sharpfinDateType(ImportDateType dateType) {
+        SharpfinProperties.DateTypes values = props.dateTypes();
+        return switch (dateType) {
+            case BOOKED -> values.booked();
+            case TRADED -> values.traded();
+            case SETTLED -> values.settled();
+        };
     }
 
     private void importOne(SharpfinSession session, JsonNode listOrder, ImportRun run) {

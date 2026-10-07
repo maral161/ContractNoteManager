@@ -3,6 +3,8 @@ package com.contractnotemanager.domain;
 import java.time.Instant;
 import java.time.LocalDate;
 
+import com.contractnotemanager.importer.ImportDateType;
+
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -25,6 +27,8 @@ public class ImportRun {
     private ImportRunStatus status;
     private LocalDate fromDate;
     private LocalDate toDate;
+    @Enumerated(EnumType.STRING)
+    private ImportDateType dateType;
     private Integer expectedCount;
     private int createdCount;
     private int updatedCount;
@@ -33,4 +37,6 @@ public class ImportRun {
     private int failedCount;
     private int detailsMissingCount;
     private String errorMessage;
+    /** The orders-list URL called in Sharpfin (first page), shown for debugging. */
+    private String requestUrl;
 }

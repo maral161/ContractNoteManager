@@ -63,7 +63,7 @@ The tables are created automatically on the first start.
 
 | Step | Where |
 |---|---|
-| Import the day's orders | *Import from Sharpfin* → pick the date range → *Import* |
+| Import the day's orders | *Import from Sharpfin* → choose *Booked / Traded / Settled* and the date range → *Import* |
 | Send to market / mark traded / mark allocated | blue button in the row, or tick rows → *Move status forward* |
 | Edit price, commission, counterpart, owner, quantities | pencil → order window → *Save* / *Save and close* (until the order is Confirmed) |
 | Confirm with contract notes | tick the Traded orders → drop the PDFs in the area above the table |
@@ -105,6 +105,11 @@ The app logs in with `POST /api/sessions` and a JSON body `{"email": …, "passw
 session cookie for the import, logs in again once on HTTP 401 and calls `DELETE /api/sessions` at the end.
 If the first real import fails with *"Sharpfin login failed (HTTP …)"*, adjust `sharpfin.login.*` in
 `application-local.yml` (method, field names, or `token-field` if a token comes back instead of a cookie).
+
+**Debugging:** every call to Sharpfin (method, URL, HTTP status – never the password) is written to the
+terminal and to `backend/logs/contractnotemanager.log`. The import result and the *Imports* tab also show the
+exact orders URL that was called. The values sent as `date_type` for Booked/Traded/Settled can be changed under
+`sharpfin.date-types` in `application-local.yml` if Sharpfin uses other names.
 
 ## 6. Backups
 

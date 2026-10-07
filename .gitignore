@@ -14,3 +14,7 @@ backend/application-local.yml
 .vscode/
 *.iml
 .DS_Store
+
+# Log files
+backend/logs/
+logs/

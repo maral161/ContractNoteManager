@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.contractnotemanager.domain.ImportRun;
+import com.contractnotemanager.importer.ImportDateType;
 import com.contractnotemanager.importer.ImportService;
 import com.contractnotemanager.repository.ImportRunRepository;
 
@@ -28,13 +29,13 @@ public class ImportController {
         this.runs = runs;
     }
 
-    public record ImportRequest(@NotNull LocalDate fromDate, @NotNull LocalDate toDate) {
+    public record ImportRequest(@NotNull LocalDate fromDate, @NotNull LocalDate toDate, ImportDateType dateType) {
     }
 
     /** Runs an import now; answers when it is finished, with the counts. */
     @PostMapping
     public ImportRun run(@Valid @RequestBody ImportRequest request) {
-        return imports.runImport(request.fromDate(), request.toDate());
+        return imports.runImport(request.fromDate(), request.toDate(), request.dateType());
     }
 
     @GetMapping
