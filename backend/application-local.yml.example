@@ -1,0 +1,23 @@
+# Copy this file to backend/application-local.yml (it is git-ignored) and fill in your values.
+# Environment variables (SHARPFIN_USERNAME, SHARPFIN_PASSWORD, ANTHROPIC_API_KEY, ...) work as well.
+
+sharpfin:
+  base-url: https://demo2.sharpfin.com
+  environment-label: STAGE        # the badge shown at the top of the page
+  username: your-sharpfin-user
+  password: your-sharpfin-password
+  # Only change these if the Sharpfin login works differently than
+  # POST /api/sessions {"username": ..., "password": ...} returning a session cookie:
+  # login:
+  #   path: /api/sessions
+  #   method: POST
+  #   username-field: username
+  #   password-field: password
+  #   token-field: token           # set when the answer contains a token instead of a cookie
+
+claude:
+  api-key: sk-ant-...             # used to read contract-note PDFs
+
+app:
+  user-name: Markus Alin
+  user-role: system user

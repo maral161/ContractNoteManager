@@ -3,7 +3,6 @@ package com.contractnotemanager.web;
 import java.time.LocalDate;
 import java.util.List;
 
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -28,6 +27,7 @@ import com.contractnotemanager.web.dto.BulkResult;
 import com.contractnotemanager.web.dto.ContractNoteDto;
 import com.contractnotemanager.web.dto.OrderDto;
 import com.contractnotemanager.web.dto.OrderFilter;
+import com.contractnotemanager.web.dto.PageDto;
 import com.contractnotemanager.web.dto.StatusHistoryDto;
 import com.contractnotemanager.web.dto.UpdateOrderRequest;
 import com.contractnotemanager.web.error.ApiException;
@@ -59,7 +59,7 @@ public class OrderController {
     }
 
     @GetMapping
-    public Page<OrderDto> list(
+    public PageDto<OrderDto> list(
             @RequestParam(defaultValue = "BOOKED") OrderFilter.DateType dateType,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
@@ -81,7 +81,7 @@ public class OrderController {
         PageRequest pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 500),
                 Sort.by(dir, property).and(Sort.by("id")));
         OrderFilter filter = new OrderFilter(dateType, from, to, asset, portfolio, owner, status, custody, noteMatch);
-        return orders.search(filter, pageable);
+        return PageDto.of(orders.search(filter, pageable));
     }
 
     @GetMapping("/{id}")

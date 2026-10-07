@@ -62,7 +62,8 @@ public class ContractNoteController {
         return notes.get(id);
     }
 
-    @GetMapping("/{id}/file")
+    /** The optional file name in the path only makes the browser's PDF viewer show the right title. */
+    @GetMapping({"/{id}/file", "/{id}/file/{name}"})
     public ResponseEntity<byte[]> file(@PathVariable Long id) {
         ContractNoteService.NamedFile file = notes.file(id);
         return ResponseEntity.ok()
