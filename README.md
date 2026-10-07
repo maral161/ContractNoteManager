@@ -50,6 +50,9 @@ Environment variables work too: `SHARPFIN_USERNAME`, `SHARPFIN_PASSWORD`, `ANTHR
 ./start.sh --build    # rebuild after pulling new code
 ```
 
+If you use Docker, `start.sh` starts Docker Desktop when it isn't running yet (wait for *Engine running*
+the first time). With a Homebrew PostgreSQL already running, Docker is not needed.
+
 Open **http://localhost:8080**. The app only listens on this Mac (127.0.0.1).
 The tables are created automatically on the first start.
 
